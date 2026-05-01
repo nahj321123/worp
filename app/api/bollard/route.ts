@@ -1,21 +1,74 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/firebaseAdmin"
 
+// ================= GET =================
+// ESP32 calls this to read slot state
 export async function GET(req: NextRequest) {
-  const slotId = Number(req.nextUrl.searchParams.get("slotId"))
+  try {
+    const slotId = Number(req.nextUrl.searchParams.get("slotId"))
 
-  if (!slotId) {
-    return NextResponse.json({ ok: false }, { status: 400 })
+    if (!slotId) {
+      return NextResponse.json(
+        { ok: false, error: "slotId required" },
+        { status: 400 }
+      )
+    }
+
+    const snapshot = await db.ref(`slots/${slotId}`).once("value")
+    const slot = snapshot.val()
+
+    return NextResponse.json(
+      {
+        ok: true,
+        slotId,
+        status: slot?.status || "available",
+        paid: slot?.paid || false,
+        bollardUp: slot?.bollardUp || false,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store", // 🔥 VERY IMPORTANT
+        },
+      }
+    )
+  } catch (error) {
+    console.error("GET /api/bollard error:", error)
+
+    return NextResponse.json(
+      { ok: false, error: "Server error" },
+      { status: 500 }
+    )
   }
+}
 
-  const snapshot = await db.ref(`slots/${slotId}`).once("value")
-  const slot = snapshot.val()
+// ================= POST =================
+// App calls this to control bollard
+export async function POST(req: NextRequest) {
+  try {
+    const { slotId, bollardUp } = await req.json()
 
-  return NextResponse.json({
-    ok: true,
-    slotId,
-    status: slot?.status || "available",
-    paid: slot?.paid || false,
-    bollardUp: slot?.bollardUp || false,
-  })
+    if (!slotId || typeof bollardUp !== "boolean") {
+      return NextResponse.json(
+        { ok: false, error: "slotId + bollardUp required" },
+        { status: 400 }
+      )
+    }
+
+    await db.ref(`slots/${slotId}`).update({
+      bollardUp,
+    })
+
+    return NextResponse.json({
+      ok: true,
+      slotId,
+      bollardUp,
+    })
+  } catch (error) {
+    console.error("POST /api/bollard error:", error)
+
+    return NextResponse.json(
+      { ok: false, error: "Server error" },
+      { status: 500 }
+    )
+  }
 }
