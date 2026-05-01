@@ -6,7 +6,7 @@ import { db } from "@/lib/firebaseAdmin";
 // ESP32 calls this to read slot state
 export async function GET(req: NextRequest) {
   try {
-    // 1. Check if db initialized successfully to prevent build-time crashes
+    // 1. Database Connection Check
     if (!db) {
       return NextResponse.json(
         { ok: false, error: "Database not initialized" },
@@ -14,30 +14,35 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const slotId = Number(req.nextUrl.searchParams.get("slotId"));
-
-    if (!slotId) {
+    // 2. Extract slotId from the URL query string
+    const { searchParams } = new URL(req.url);
+    const slotIdStr = searchParams.get("slotId");
+    
+    if (!slotIdStr) {
       return NextResponse.json(
-        { ok: false, error: "slotId required" },
+        { ok: false, error: "slotId query parameter is required" },
         { status: 400 }
       );
     }
 
+    const slotId = Number(slotIdStr);
+
+    // 3. Fetch from Firebase Realtime Database
     const snapshot = await db.ref(`slots/${slotId}`).once("value");
     const slot = snapshot.val();
 
+    // 4. Return Data to ESP32
     return NextResponse.json(
       {
         ok: true,
         slotId,
         status: slot?.status || "available",
         paid: slot?.paid || false,
-        // Using ?? ensures that if bollardUp is exactly 'false', it stays false
         bollardUp: slot?.bollardUp ?? true, 
       },
       {
         headers: {
-          "Cache-Control": "no-store", 
+          "Cache-Control": "no-store, max-age=0", 
         },
       }
     );
@@ -51,10 +56,9 @@ export async function GET(req: NextRequest) {
 }
 
 // ================= POST =================
-// App calls this to control bollard
+// Mobile App calls this to control the bollard
 export async function POST(req: NextRequest) {
   try {
-    // 1. Check if db initialized successfully
     if (!db) {
       return NextResponse.json(
         { ok: false, error: "Database not initialized" },
@@ -62,16 +66,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { slotId, bollardUp } = await req.json();
+    const body = await req.json();
+    const { slotId, bollardUp } = body;
 
-    if (!slotId || bollardUp === undefined) {
+    if (slotId === undefined || bollardUp === undefined) {
       return NextResponse.json(
-        { ok: false, error: "slotId + bollardUp required" },
+        { ok: false, error: "slotId and bollardUp are required in body" },
         { status: 400 }
       );
     }
 
-    // Update Firebase directly
+    // Update Firebase
     await db.ref(`slots/${slotId}`).update({
       bollardUp: bollardUp,
     });
