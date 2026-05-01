@@ -1,0 +1,464 @@
+==============================================================================
+  SUREPARK BAGUIO — ESP32 TO WEB APP INTEGRATION GUIDE
+  Complete step-by-step using YOUR existing hardware code
+==============================================================================
+
+  Your existing sketch already has:
+    - HC-SR04 ultrasonic sensor  (trigPin=5, echoPin=18)
+    - SG90 servo motor           (servoPin=23)
+    - 3 LEDs                     (ledDetect=25, ledNoDetect=26, ledEnable=27)
+    - 2 push buttons             (buttonMain=19, buttonEnable=21)
+    - 3 states: STATE_ENABLE, STATE_DETECT, STATE_NO_DETECT
+
+  This guide explains how to add WiFi + HTTP calls to that code so the
+  web app dashboard automatically reflects what the hardware is doing
+  in real time — and vice versa (dashboard controls the servo via the app).
+
+==============================================================================
+  PART 1 — HOW THE INTEGRATION WORKS
+==============================================================================
+
+  Your hardware state machine maps to the web app slot statuses like this:
+
+  YOUR HARDWARE STATE     WEB APP SLOT STATUS     WHAT IT MEANS
+  -------------------     -------------------     --------------------------
+  STATE_NO_DETECT         available               No car, slot is free
+  STATE_ENABLE            reserved                Slot reserved, car expected
+  STATE_DETECT            occupied                Car physically detected
+  (button press)          (bollard control)       User controls servo via app
+
+  The ESP32 talks to the web app through 2 HTTP endpoints:
+
+  1. POST http://<PC_IP>:3000/api/sensor
+     -----------------------------------
+     Your ESP32 calls this whenever a car is detected or leaves.
+     Body: { "slotId": 1, "carPresent": true }
+     - carPresent: true  → app changes slot to "occupied"
+     - carPresent: false → app changes slot back to "available"
+
+  2. GET http://<PC_IP>:3000/api/bollard?slotId=1
+     -----------------------------------------------
+     Your ESP32 polls this every 2 seconds to check if the user
+     pressed "Raise Bollard" or "Lower Bollard" in the web app.
+     Response: { "bollardUp": true }
+     - bollardUp: true  → servo goes to 180 degrees
+     - bollardUp: false → servo goes to 0 degrees
+
+  That is the entire integration. Your existing state machine logic
+  stays exactly the same. You only ADD these two HTTP calls on top.
+
+==============================================================================
+  PART 2 — WHAT YOU NEED TO INSTALL
+==============================================================================
+
+  STEP 1: Install the ArduinoJson library
+  ----------------------------------------
+  This library parses the JSON responses from the web app server.
+
+    1. Open Arduino IDE
+    2. Go to: Sketch → Include Library → Manage Libraries
+    3. In the search box type: ArduinoJson
+    4. Find "ArduinoJson by Benoit Blanchon"
+    5. Click Install
+    6. Wait for the green "INSTALLED" label to appear
+    7. Close the Library Manager
+
+  You already have ESP32Servo installed (used in your existing code).
+  WiFi.h and HTTPClient.h are built into the ESP32 Arduino package.
+  No other libraries are needed.
+
+==============================================================================
+  PART 3 — FIND YOUR PC'S IP ADDRESS
+==============================================================================
+
+  The ESP32 needs to know the IP address of the computer running
+  "npm run dev" (the web app server). Both devices MUST be on the
+  same WiFi network.
+
+  ON WINDOWS:
+    1. Press Windows key + R
+    2. Type: cmd
+    3. Press Enter
+    4. In the black window type: ipconfig
+    5. Press Enter
+    6. Look for "Wireless LAN adapter Wi-Fi:"
+    7. Find the line "IPv4 Address . . . . : 192.168.X.X"
+    8. That number is your SERVER_IP
+
+  ON MAC:
+    1. Open Terminal
+    2. Type: ifconfig | grep "inet "
+    3. Press Enter
+    4. Look for a line starting with "inet 192.168.X.X"
+    5. That number is your SERVER_IP
+
+  ON LINUX:
+    1. Open Terminal
+    2. Type: hostname -I
+    3. Press Enter
+    4. The first IP address shown is your SERVER_IP
+
+  EXAMPLE: If ipconfig shows 192.168.1.105, your SERVER_IP is 192.168.1.105
+
+  IMPORTANT: This IP address can change when you reconnect to WiFi.
+  If the ESP32 stops talking to the server later, run ipconfig again
+  and update SERVER_IP in the code.
+
+==============================================================================
+  PART 4 — THE UPDATED ESP32 CODE
+==============================================================================
+
+  The file "surepark_integrated.ino" (in this same folder) contains
+  your complete existing code with the WiFi + HTTP integration added.
+
+  Here is a summary of what was changed vs your original code:
+
+  ADDED at the top (new includes):
+    #include <WiFi.h>
+    #include <HTTPClient.h>
+    #include <ArduinoJson.h>
+
+  ADDED config section (you fill these in):
+    #define WIFI_SSID     "your wifi name"
+    #define WIFI_PASSWORD "your wifi password"
+    #define SERVER_IP     "192.168.X.X"
+    #define SLOT_ID       1
+
+  ADDED connectWiFi() function:
+    - Connects to WiFi on startup
+    - Blinks ledEnable while connecting
+    - Prints IP address to Serial Monitor when connected
+
+  ADDED postSensorEvent(bool carPresent) function:
+    - Sends POST /api/sensor to the web server
+    - Called when STATE changes to STATE_DETECT (car arrived)
+    - Called when STATE changes to STATE_NO_DETECT (car left)
+
+  ADDED pollBollardCommand() function:
+    - Sends GET /api/bollard?slotId=N to the web server
+    - Reads the bollardUp value from the response
+    - Moves servo to 180 if bollardUp is true
+    - Moves servo to 0 if bollardUp is false
+    - This lets the web app dashboard control your servo
+
+  CHANGED in loop():
+    - postSensorEvent(true)  is called when entering STATE_DETECT
+    - postSensorEvent(false) is called when entering STATE_NO_DETECT
+    - pollBollardCommand()   is called every 2000ms via a timer
+
+  UNCHANGED (your original logic is intact):
+    - All 3 LED states
+    - Button debounce logic
+    - Ultrasonic sensor reading
+    - State machine (STATE_ENABLE, STATE_DETECT, STATE_NO_DETECT)
+    - Servo movements from button presses
+    - All pin definitions
+
+==============================================================================
+  PART 5 — HOW TO CONFIGURE AND UPLOAD THE CODE
+==============================================================================
+
+  STEP 1: Open the file
+    - Open Arduino IDE
+    - Go to: File → Open
+    - Navigate to the esp32 folder in your project
+    - Open: surepark_integrated.ino
+
+  STEP 2: Fill in your WiFi and server details
+    Find these 4 lines near the top of the file:
+
+      #define WIFI_SSID     "YOUR_WIFI_NAME"
+      #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+      #define SERVER_IP     "192.168.X.X"
+      #define SLOT_ID       1
+
+    Replace them with your actual values. Examples:
+
+      #define WIFI_SSID     "PLDT-HOME-5G"
+      #define WIFI_PASSWORD "mypassword123"
+      #define SERVER_IP     "192.168.1.105"
+      #define SLOT_ID       1
+
+    If you have multiple ESP32 boards (one per slot), change SLOT_ID
+    to match the slot number: 1, 2, 3, 4, or 5.
+
+  STEP 3: Select the correct board
+    - Go to: Tools → Board → ESP32 Arduino → ESP32 Dev Module
+
+  STEP 4: Select the correct COM port
+    - Go to: Tools → Port
+    - Select the COM port for your ESP32
+    - If you are unsure which one: unplug ESP32, check the list,
+      plug back in, check the list again — the new port is your board
+
+  STEP 5: Upload the sketch
+    - Click the Upload button (right arrow, top left of Arduino IDE)
+    - When you see "Connecting......" in the status bar at the bottom,
+      press and HOLD the BOOT button on your ESP32
+    - Release BOOT when you see upload percentage: "Writing at 0x... (1%)"
+    - Wait for "Done uploading"
+
+  STEP 6: Open Serial Monitor
+    - Go to: Tools → Serial Monitor
+    - Set baud rate to 115200 (bottom right dropdown)
+    - Press the RST button on your ESP32
+    - You should see:
+
+        ==========================================
+          SurePark Baguio — Integrated Firmware
+          Slot ID: 1
+        ==========================================
+        [WIFI] Connecting to: PLDT-HOME-5G
+        ..................
+        [WIFI] Connected! IP: 192.168.1.87
+        [SYSTEM] Ready. Waiting for enable button.
+
+    - If you see "WiFi failed" check SSID and password spelling
+
+==============================================================================
+  PART 6 — HOW TO START THE WEB APP SERVER
+==============================================================================
+
+  The ESP32 cannot talk to the app unless the server is running.
+
+  STEP 1: Open a terminal or command prompt on your PC
+    Windows: Press Win+R, type cmd, press Enter
+    Mac:     Open Terminal from Applications → Utilities
+
+  STEP 2: Navigate to your project folder
+    Type:  cd path\to\your\surepark\project
+    Press: Enter
+
+  STEP 3: Start the server
+    Type:  npm run dev
+    Press: Enter
+
+  STEP 4: Confirm the server is running
+    You should see:
+      ▲ Next.js 16.x.x
+      - Local:   http://localhost:3000
+      - Network: http://192.168.1.105:3000
+
+    The Network address (192.168.X.X:3000) is what the ESP32 uses.
+    Make sure the IP shown here matches the SERVER_IP you put in the code.
+
+  STEP 5: Open the web app in your browser
+    Go to: http://localhost:3000
+    Log in and navigate to the Dashboard page.
+
+  IMPORTANT: Keep this terminal window open while testing.
+  If you close it, the server stops and the ESP32 loses connection.
+
+==============================================================================
+  PART 7 — TESTING THE INTEGRATION STEP BY STEP
+==============================================================================
+
+  Do these tests in order. Each test builds on the previous one.
+
+  ---- TEST A: WiFi Connection ----
+
+    1. Power on the ESP32 (connect USB to PC)
+    2. Open Serial Monitor (115200 baud)
+    3. Expected output:
+         [WIFI] Connecting to: YourWiFiName
+         ........
+         [WIFI] Connected! IP: 192.168.X.X
+    4. If you do NOT see "Connected":
+       - Double check WIFI_SSID spelling (case sensitive)
+       - Double check WIFI_PASSWORD
+       - Make sure your PC and ESP32 are on the SAME WiFi network
+         (not one on 2.4GHz and the other on 5GHz)
+
+  ---- TEST B: Server Reachable from ESP32 ----
+
+    1. Make sure "npm run dev" is running on your PC
+    2. With Serial Monitor open, press the EN (enable) button
+       on your ESP32 (the one wired to buttonEnable, GPIO 21)
+    3. You should see in Serial Monitor:
+         [STATE] → STATE_ENABLE
+         ledEnable ON
+    4. Now place your hand in front of the sensor
+    5. Press the main button (GPIO 19) to activate sensor scanning
+    6. When the sensor detects your hand within 20cm:
+         [STATE] → STATE_DETECT
+         [SENSOR] Sending carPresent=true to server...
+         [SENSOR] HTTP 200 - Server acknowledged
+    7. If you see HTTP 200: the ESP32 reached the server successfully
+    8. If you see HTTP -1 or "connection refused":
+       - Check SERVER_IP matches the ip shown in "npm run dev" output
+       - Check port 3000 is not blocked by Windows Firewall:
+           Windows: Control Panel → Windows Defender Firewall
+                    → Allow an app → Add port 3000
+       - Check both devices are on the same WiFi network
+
+  ---- TEST C: Web App Reflects Hardware State ----
+
+    1. Have the web app dashboard open in your browser
+    2. The slot that matches your SLOT_ID should start as "Available" (green)
+    3. Press enable button on ESP32 — NOTHING changes in app yet (expected)
+       The app only changes when car is physically detected
+    4. Activate the sensor (press main button), then place hand within 20cm
+    5. Watch the web app dashboard — within 3 seconds the slot should
+       change from "Reserved" to "Occupied" (red)
+       NOTE: The slot must already be in "Reserved + Paid" state in the
+       app for the sensor to trigger "Occupied". See Part 8 for the
+       full expected flow.
+    6. Remove your hand from the sensor
+    7. The ESP32 enters STATE_NO_DETECT
+    8. Within 3 seconds, the web app slot changes back to "Available"
+
+  ---- TEST D: Web App Controls Servo ----
+
+    1. In the web app dashboard, click "View" on your slot
+    2. Complete a reservation and payment (to unlock bollard control)
+    3. Click "Lower Bollard" in the slot details panel
+    4. Watch your physical servo — it should move to 0 degrees
+    5. Click "Raise Bollard"
+    6. Servo should move to 180 degrees
+    7. This confirms the ESP32 is polling the bollard API correctly
+    8. If servo does not move, check Serial Monitor for:
+         [BOLLARD] Server command received → RAISE
+       If you see the message but servo does not move, check servo wiring
+       If you do NOT see the message, the HTTP GET is failing
+
+==============================================================================
+  PART 8 — FULL SYSTEM FLOW (END TO END)
+==============================================================================
+
+  This is the complete expected sequence when everything is working:
+
+  STEP 1 — User opens web app and reserves a slot
+    - Web app: Slot status changes from "Available" → "Reserved" (yellow)
+    - Hardware: No change yet
+
+  STEP 2 — User pays in the web app
+    - Web app: Bollard Control panel unlocks in the slot details
+    - Web app: Slot stays "Reserved"
+    - Hardware: No change yet
+
+  STEP 3 — User presses Enable button on ESP32
+    - Hardware: STATE changes to STATE_ENABLE
+    - Hardware: ledEnable (GPIO 27) turns ON
+    - Web app: No change yet
+
+  STEP 4 — User presses Main button on ESP32
+    - Hardware: activated=true, at180=true
+    - Hardware: Servo moves to 180 degrees
+    - Hardware: Sensor starts scanning
+
+  STEP 5 — Car drives in, sensor detects it (distance < 20cm)
+    - Hardware: STATE changes to STATE_DETECT
+    - Hardware: ledDetect (GPIO 25) turns ON
+    - Hardware: ESP32 sends POST /api/sensor { slotId:1, carPresent:true }
+    - Web app:  Slot status changes "Reserved" → "Occupied" (red)
+
+  STEP 6 — User clicks "Lower Bollard" in web app
+    - Web app:  Sends POST /api/bollard { slotId:1, bollardUp:false }
+    - Hardware: ESP32 polls GET /api/bollard every 2 seconds
+    - Hardware: Receives bollardUp=false → servo moves to 0 degrees
+
+  STEP 7 — Car leaves, sensor no longer detects (distance > 20cm)
+    - Hardware: STATE changes to STATE_NO_DETECT
+    - Hardware: ledNoDetect (GPIO 26) turns ON
+    - Hardware: Servo resets to 0
+    - Hardware: ESP32 sends POST /api/sensor { slotId:1, carPresent:false }
+    - Web app:  Slot resets to "Available" (green)
+
+==============================================================================
+  PART 9 — WIRING REFERENCE (YOUR EXISTING PINS)
+==============================================================================
+
+  No wiring changes needed. Your existing wiring is used as-is.
+
+  Component              ESP32 GPIO    Notes
+  ---------              ----------    -----
+  HC-SR04 TRIG           GPIO 5        Already in your code
+  HC-SR04 ECHO           GPIO 18       Use voltage divider (5V→3.3V)!
+  SG90 Servo signal      GPIO 23       Already in your code
+  Green LED (detect)     GPIO 25       Via 220 ohm resistor
+  Red LED (no detect)    GPIO 26       Via 220 ohm resistor
+  Yellow LED (enable)    GPIO 27       Via 220 ohm resistor
+  Main button            GPIO 19       INPUT_PULLUP (already in code)
+  Enable button          GPIO 21       INPUT_PULLUP (already in code)
+
+  HC-SR04 ECHO VOLTAGE DIVIDER (MUST HAVE):
+  ------------------------------------------
+  HC-SR04 ECHO → [1000 ohm] → GPIO 18
+                            → [2000 ohm] → GND
+
+  The ECHO pin outputs 5V. ESP32 GPIO max is 3.3V.
+  Without the voltage divider you may damage the ESP32 over time.
+
+==============================================================================
+  PART 10 — TROUBLESHOOTING QUICK REFERENCE
+==============================================================================
+
+  PROBLEM                           SOLUTION
+  -------                           --------
+  WiFi not connecting               Check SSID and password. Make sure
+                                    both devices are on same network.
+                                    Try 2.4GHz instead of 5GHz band.
+
+  HTTP -1 / connection refused      Check SERVER_IP matches PC IP.
+                                    Check npm run dev is running.
+                                    Allow port 3000 in Windows Firewall.
+                                    Ping the PC from another device to
+                                    confirm it is reachable on network.
+
+  HTTP 404 from /api/sensor         Check SLOT_ID is 1 to 5.
+                                    Slot must exist in the server store.
+
+  HTTP 403 from /api/bollard        Slot must be paid before bollard
+                                    control is allowed. Complete payment
+                                    in the web app first.
+
+  Sensor reads 999 (no echo)        Check ECHO voltage divider wiring.
+                                    HC-SR04 must be powered by 5V.
+                                    Check TRIG and ECHO not swapped.
+
+  Servo does not move from app      Check poll interval is running.
+                                    Open Serial Monitor and look for
+                                    [BOLLARD] messages every 2 seconds.
+                                    Check servo power supply is 5V.
+
+  App shows correct state but       This is expected — the app only
+  slot does not change to Occupied  changes to Occupied when the slot
+  when sensor detects               is already in "Reserved + Paid"
+                                    state. Reserve and pay first.
+
+  State changes twice fast          Debounce counter (DEBOUNCE_COUNT=3)
+  (flickering)                      prevents this. If still flickering,
+                                    increase to 5.
+
+  ESP32 crashes / restarts          Check power supply. Servo draws
+                                    high current — power it from an
+                                    external 5V source, not ESP32 pins.
+
+==============================================================================
+  PART 11 — MULTIPLE ESP32 BOARDS (ONE PER SLOT)
+==============================================================================
+
+  If you have 5 parking slots, you need 5 ESP32 boards.
+  Each board runs the same code but with a different SLOT_ID.
+
+  Board 1 (Slot 1 — Session Road):
+    #define SLOT_ID 1
+
+  Board 2 (Slot 2 — Harrison Road):
+    #define SLOT_ID 2
+
+  Board 3 (Slot 3 — SM Baguio):
+    #define SLOT_ID 3
+
+  Board 4 (Slot 4 — Cedar Peak):
+    #define SLOT_ID 4
+
+  Board 5 (Slot 5 — Mabini):
+    #define SLOT_ID 5
+
+  WIFI_SSID, WIFI_PASSWORD, and SERVER_IP are the same on all boards.
+  Upload the sketch to each board one at a time, changing only SLOT_ID.
+
+==============================================================================
+  END OF GUIDE
+==============================================================================

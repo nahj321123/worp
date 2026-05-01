@@ -1,0 +1,399 @@
+================================================================
+  SUREPARK BAGUIO — INTEGRATION GUIDE
+  App-Controlled Mode (No Physical Buttons)
+  Based on your actual wiring photo
+================================================================
+
+  The physical Enable and Main buttons have been removed entirely.
+  The web app now controls everything. The ESP32 only handles:
+    - Ultrasonic sensor (detect car present / car left)
+    - Servo motor (bollard up / down)
+    - LEDs (status indicators)
+
+  The app controls:
+    - Activating the slot (was Enable + Main button)
+    - Raising / Lowering the bollard
+    - Reserving, paying, and releasing the slot
+
+
+================================================================
+  PART 1 — WHAT YOU NEED TO DOWNLOAD AND INSTALL
+================================================================
+
+  1A. Node.js (runs the web app server)
+  ---------------------------------------
+  URL: https://nodejs.org/en/download
+  - Click the LTS button (big green button)
+  - Download the Windows .msi installer
+  - Run the installer, click Next on every screen
+  - Leave all defaults — do not change anything
+  - After install, open a NEW Command Prompt and type:
+      node --version
+    You should see something like v22.x.x
+    If you see an error, restart your PC and try again.
+
+  1B. Arduino IDE 2 (uploads code to ESP32)
+  ------------------------------------------
+  URL: https://www.arduino.cc/en/software
+  - Click "Windows Win 10 and newer, 64 bits"
+  - Run the installer, click Next on every screen
+  - Leave all defaults
+
+  1C. CP2102 USB Driver (lets PC talk to ESP32)
+  ----------------------------------------------
+  URL: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+  - Click "Downloads" tab
+  - Download "CP210x Windows Drivers"
+  - Extract the ZIP file
+  - Right-click CP210xVCPInstaller_x64.exe → Run as administrator
+  - Click Next, then Install, then Finish
+
+  IF your board uses a CH340 chip instead:
+  URL: https://www.wch-ic.com/downloads/CH341SER_EXE.html
+  - Download and run CH341SER.exe
+  - Click INSTALL
+
+  How to know which chip you have:
+  Look at the small IC next to the USB port on the ESP32 board.
+  It will say either CP2102 or CH340 on the chip itself.
+
+  1D. ESP32 Board Package (inside Arduino IDE)
+  ---------------------------------------------
+  Step 1. Open Arduino IDE
+  Step 2. Go to File → Preferences
+  Step 3. Paste this URL in "Additional boards manager URLs":
+    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+  Step 4. Click OK
+  Step 5. Go to Tools → Board → Boards Manager
+  Step 6. Search: esp32
+  Step 7. Find "esp32 by Espressif Systems"
+  Step 8. Click Install (this downloads ~200MB, takes a few minutes)
+  Step 9. Wait for "INSTALLED" to appear next to the package
+
+  1E. ArduinoJson Library (inside Arduino IDE)
+  ---------------------------------------------
+  Step 1. In Arduino IDE go to Sketch → Include Library → Manage Libraries
+  Step 2. Search: ArduinoJson
+  Step 3. Find "ArduinoJson by Benoit Blanchon"
+  Step 4. Click Install
+
+  1F. ESP32Servo Library (inside Arduino IDE)
+  --------------------------------------------
+  Step 1. In Arduino IDE go to Sketch → Include Library → Manage Libraries
+  Step 2. Search: ESP32Servo
+  Step 3. Find "ESP32Servo by Kevin Harrington"
+  Step 4. Click Install
+
+
+================================================================
+  PART 2 — WIRING (BASED ON YOUR PHOTO)
+================================================================
+
+  Arduino UNO is used as a POWER SUPPLY ONLY.
+  - UNO 5V pin  → ESP32 VIN pin
+  - UNO GND pin → ESP32 GND pin
+  - UNO is powered by USB from PC or a USB charger
+
+  DO NOT connect Arduino UNO TX/RX or any signal pins to ESP32.
+  The UNO is only providing 5V power.
+
+  SLOT 1 (sys1) — Pins on ESP32:
+  --------------------------------
+  HC-SR04 VCC   → 5V rail (from UNO)
+  HC-SR04 GND   → GND rail
+  HC-SR04 TRIG  → ESP32 GPIO 5
+  HC-SR04 ECHO  → Voltage divider → ESP32 GPIO 18
+
+  SG90 Servo
+  Servo Red     → 5V rail (from UNO)
+  Servo Brown   → GND rail
+  Servo Orange  → ESP32 GPIO 23
+
+  LEDs (each with 220 ohm resistor in series)
+  Green LED +   → ESP32 GPIO 25   (Car Detected)
+  Red LED +     → ESP32 GPIO 26   (No Car / Slot Empty)
+  Blue LED +    → ESP32 GPIO 27   (Slot Enabled / Active)
+  All LED -     → GND rail
+
+  SLOT 2 (sys2) — Pins on ESP32:
+  --------------------------------
+  HC-SR04 TRIG  → ESP32 GPIO 33
+  HC-SR04 ECHO  → Voltage divider → ESP32 GPIO 16
+  Servo Orange  → ESP32 GPIO 13
+  Green LED +   → ESP32 GPIO 14
+  Red LED +     → ESP32 GPIO 32
+  Blue LED +    → ESP32 GPIO 2
+
+  VOLTAGE DIVIDER FOR EACH ECHO PIN (REQUIRED):
+  -----------------------------------------------
+  The HC-SR04 ECHO outputs 5V. The ESP32 GPIO only accepts 3.3V.
+  Without this divider you risk damaging your ESP32.
+
+  Wiring:
+    HC-SR04 ECHO  →  [1000 ohm resistor]  →  ESP32 GPIO pin
+                                          →  [2000 ohm resistor]  →  GND
+
+  You can also use 10k and 20k resistors — same ratio works.
+
+  BUTTONS — NOT NEEDED ANYMORE:
+  --------------------------------
+  The btnMain (GPIO 19, 17) and btnEnable (GPIO 21, 4) pins
+  are no longer in the code. You do not need to wire any buttons.
+  Everything is controlled from the web app.
+
+
+================================================================
+  PART 3 — CONFIGURE THE SKETCH
+================================================================
+
+  Step 1. Open Arduino IDE
+  Step 2. Go to File → Open
+  Step 3. Navigate to your project folder
+  Step 4. Open: esp32/surepark_integrated.ino
+
+  Step 5. Find these lines at the very top and change them:
+
+    #define WIFI_SSID      "YOUR_WIFI_NAME"
+    #define WIFI_PASSWORD  "YOUR_WIFI_PASSWORD"
+    #define SERVER_IP      "192.168.1.100"
+    #define SERVER_PORT    3000
+
+  WIFI_SSID     = the name of your WiFi network (case sensitive)
+  WIFI_PASSWORD = your WiFi password
+  SERVER_IP     = the IP address of the PC running npm run dev
+  SERVER_PORT   = leave as 3000
+
+  HOW TO FIND YOUR PC IP ADDRESS:
+  Step 1. Press Windows key
+  Step 2. Type cmd and press Enter
+  Step 3. Type:  ipconfig
+  Step 4. Press Enter
+  Step 5. Look for "IPv4 Address" under your active connection
+          Example: 192.168.1.105
+  Step 6. Use that number as SERVER_IP
+
+  IMPORTANT:
+  - Your PC and ESP32 must be on the SAME WiFi network
+  - Do not use a mobile hotspot unless both devices connect to it
+  - The IP address may change if you restart your router
+
+
+================================================================
+  PART 4 — UPLOAD THE SKETCH TO ESP32
+================================================================
+
+  Step 1. Plug the ESP32 into your PC via Micro USB cable
+          Make sure it is a DATA cable not a charge-only cable
+
+  Step 2. In Arduino IDE:
+          Go to Tools → Board → ESP32 Arduino → ESP32 Dev Module
+
+  Step 3. Go to Tools → Port
+          Select the COM port that appeared when you plugged in ESP32
+          Example: COM4 or COM5
+          If no port appears, the CP2102 driver is not installed (see Part 1C)
+
+  Step 4. Confirm these settings under Tools:
+          Upload Speed:     921600
+          CPU Frequency:    240MHz (WiFi/BT)
+          Flash Size:       4MB (32Mb)
+          Partition Scheme: Default 4MB with spiffs
+
+  Step 5. Click the Upload button (right arrow, top left of IDE)
+
+  Step 6. Watch the bottom status bar
+          When you see:   Connecting.........._____
+          IMMEDIATELY press and HOLD the BOOT button on the ESP32
+          (labeled BOOT or IO0, usually on the left side of the board)
+
+  Step 7. Keep holding BOOT until you see:
+          Writing at 0x00001000... (1%)
+          Then release BOOT
+
+  Step 8. Wait for:  Done uploading
+
+  Step 9. Open Tools → Serial Monitor
+          Set baud rate to 115200 (bottom right dropdown)
+          Press the RST (EN) button on ESP32
+          You should see:
+            ========================================
+              SurePark Baguio — App-Controlled Mode
+              No physical buttons. App controls all.
+            ========================================
+            [WiFi] Connecting to: YourWiFiName
+            ............
+            [WiFi] Connected. IP: 192.168.1.xxx
+            [System] Ready. Waiting for app to activate slots.
+
+
+================================================================
+  PART 5 — START THE WEB APP SERVER
+================================================================
+
+  Step 1. Open Command Prompt
+  Step 2. Navigate to your SurePark project folder:
+          cd C:\path\to\your\surepark-project
+
+  Step 3. Install dependencies (first time only):
+          npm install
+
+  Step 4. If you see errors about missing packages run:
+          npm install autoprefixer leaflet react-leaflet @types/leaflet
+
+  Step 5. Start the server:
+          npm run dev
+
+  Step 6. You should see:
+            ▲ Next.js 16.x.x
+            - Local:   http://localhost:3000
+            - Network: http://192.168.1.xxx:3000
+
+  Step 7. Open your browser and go to:
+          http://localhost:3000
+
+  Step 8. Log in with any email and password
+          (the app accepts any credentials for demo purposes)
+
+  KEEP THIS COMMAND PROMPT OPEN.
+  Closing it stops the server and the ESP32 loses connection.
+
+
+================================================================
+  PART 6 — HOW THE APP-CONTROLLED FLOW WORKS
+================================================================
+
+  OLD FLOW (with physical buttons):
+    User pays → Press Enable button → Press Main button → Car enters
+
+  NEW FLOW (app-controlled, no buttons):
+    User pays → App presses "Activate Slot" → ESP32 monitors → Car enters
+
+  STEP BY STEP SESSION:
+
+  1. USER FINDS AND RESERVES A SLOT
+     - Open http://localhost:3000 in browser
+     - Log in
+     - Find an available (green) slot
+     - Click View → Reserve
+     - Slot turns yellow (Reserved)
+
+  2. USER PAYS
+     - Inside the slot details, select payment method
+     - Click Pay Now
+     - A QR token is generated
+
+  3. OPERATOR ACTIVATES THE SLOT FROM APP
+     - Click View on the reserved slot
+     - In the Bollard Control panel, press:
+         "Activate Slot — Allow Entry"  (green button)
+     - The ESP32 receives this command within 2 seconds
+     - Blue LED turns ON on the ESP32 board for that slot
+     - Serial Monitor shows:
+         [Command] Slot 1 → ACTIVATED by app
+
+  4. CAR DRIVES IN
+     - The ultrasonic sensor detects the car (distance ≤ 20 cm)
+     - Green LED turns ON
+     - ESP32 sends:  POST /api/sensor  { slotId: 1, carPresent: true }
+     - Slot status changes to OCCUPIED (red) in the app automatically
+     - Serial Monitor shows:
+         [Sensor] Slot 1 CAR ARRIVED → HTTP 200
+
+  5. RAISE BOLLARD FROM APP (to lock car in, or block re-entry)
+     - In the app Bollard Control panel, click "Raise Bollard"
+     - Servo rotates to 90 degrees (CLOSED position)
+     - Red status badge shows RAISED in the app
+
+  6. CAR LEAVES
+     - Sensor detects car is gone (distance > 20 cm)
+     - Red LED turns ON (slot empty)
+     - ESP32 sends:  POST /api/sensor  { slotId: 1, carPresent: false }
+     - Slot resets to AVAILABLE (green) in the app automatically
+     - Serial Monitor shows:
+         [Sensor] Slot 1 CAR LEFT → HTTP 200
+
+
+================================================================
+  PART 7 — LED STATUS GUIDE
+================================================================
+
+  RED LED ON    = Slot is empty and idle (NO_DETECT state)
+  BLUE LED ON   = Slot has been activated from app, monitoring for car
+  GREEN LED ON  = Car is detected by sensor (DETECT state)
+
+  If all 3 LEDs are off → setup error, check wiring and upload again
+
+
+================================================================
+  PART 8 — TROUBLESHOOTING
+================================================================
+
+  PROBLEM: Serial Monitor shows nothing
+  Fix: Set baud rate to 115200. Press RST button on ESP32.
+
+  PROBLEM: [WiFi] Failed. Check WIFI_SSID / WIFI_PASSWORD.
+  Fix: Double check the WiFi name (case sensitive) and password.
+       Make sure your router is 2.4 GHz — ESP32 does not support 5 GHz.
+
+  PROBLEM: [Command] shows no output / slot never activates
+  Fix: Check SERVER_IP matches your PC IP from ipconfig.
+       Make sure npm run dev is running on your PC.
+       Both PC and ESP32 must be on the same WiFi network.
+
+  PROBLEM: HTTP 403 on sensor event
+  Fix: The slot must be reserved AND paid before the sensor fires.
+       Go through the full reserve → pay → activate flow in the app first.
+
+  PROBLEM: Servo does not move
+  Fix: Servo must be powered by the 5V from Arduino UNO, not from ESP32.
+       Check the orange signal wire is on the correct GPIO pin.
+       Make sure ESP32Servo library is installed.
+
+  PROBLEM: Sensor always reads 0 or 999
+  Fix: Check voltage divider on ECHO pin.
+       HC-SR04 must be powered by 5V not 3.3V.
+       Make sure TRIG and ECHO pins are not swapped.
+
+  PROBLEM: App looks unstyled (plain white, no colors)
+  Fix: Stop the server (Ctrl+C), run:
+         npm install autoprefixer
+         npm run dev
+       Then refresh the browser.
+
+  PROBLEM: Module not found: leaflet
+  Fix: Run:  npm install leaflet react-leaflet @types/leaflet
+       Then: npm run dev
+
+  PROBLEM: Upload fails — "Failed to connect to ESP32"
+  Fix: Hold the BOOT button on the ESP32 when you see
+       "Connecting......____" in the IDE status bar.
+       Try a different USB cable (must be a data cable not charge-only).
+
+  PROBLEM: COM port not visible in Arduino IDE
+  Fix: Install CP2102 driver (see Part 1C).
+       Unplug and replug the ESP32 after installing.
+
+
+================================================================
+  PART 9 — QUICK CHECKLIST BEFORE EVERY DEMO
+================================================================
+
+  [ ] Arduino UNO powered by USB
+  [ ] ESP32 connected to UNO via 5V and GND
+  [ ] PC and ESP32 on same WiFi network
+  [ ] npm run dev is running in Command Prompt
+  [ ] Serial Monitor open at 115200 baud
+  [ ] Serial Monitor shows "Ready. Waiting for app to activate slots."
+  [ ] Browser open at http://localhost:3000
+  [ ] Logged in to the app
+  [ ] Slot 1 and Slot 2 show as Available (green) in the dashboard
+
+  TO START A SESSION:
+  [ ] Reserve a slot in the app
+  [ ] Pay in the app
+  [ ] Press "Activate Slot — Allow Entry" in the app
+  [ ] Watch blue LED turn on on the ESP32
+  [ ] Move hand in front of sensor (simulates car arriving)
+  [ ] Watch green LED turn on and slot turn red in app
+
+================================================================

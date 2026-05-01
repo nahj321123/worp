@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-slate-900 text-white;
+  }
+}
+
+/* Force the Map Container to be visible */
+.leaflet-container {
+  width: 100%;
+  height: 440px !important; /* Forces height if the div collapses */
+  background: #0f172a !important;
+  z-index: 1;
+}
+
+/* Fix for broken or invisible map tiles */
+.leaflet-tile {
+  visibility: inherit !important;
+}
+
+/* Ensure the zoom controls and pins stay on top */
+.leaflet-pane {
+  z-index: 400 !important;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 1000 !important;
+}
+
+/* Add this to test if Tailwind is working */
+.test-card {
+  @apply p-8 bg-blue-600 rounded-xl shadow-2xl;
+}

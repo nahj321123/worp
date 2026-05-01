@@ -1,0 +1,289 @@
+Build a smart parking management web app called "SurePark Baguio" using Next.js 15 App Router, TypeScript, Tailwind CSS, and shadcn/ui. The entire app uses a dark slate theme (bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900). Use Inter from next/font/google.
+
+========================================
+TECH STACK
+========================================
+- Next.js App Router (TypeScript)
+- Tailwind CSS + shadcn/ui
+- lucide-react for all icons
+- leaflet + react-leaflet for the map (loaded dynamically with ssr:false)
+- localStorage for auth and slot data persistence
+- Next.js Route Handlers for the ESP32 API layer
+- postcss with both tailwindcss and autoprefixer plugins
+
+========================================
+DATA MODEL
+========================================
+ParkingSlot interface:
+  id: number
+  name: string
+  location: string
+  price: number
+  status: "available" | "reserved" | "occupied"
+  reservedBy?: string
+  reservedAt?: number  (timestamp ms)
+  paid?: boolean
+  activeQrToken?: string
+  checkedIn?: boolean
+  bollardUp?: boolean  (true = raised/blocking, false = lowered/open)
+
+5 default slots:
+  { id:1, name:"Slot 1", location:"Session Road",  price:50, status:"available" }
+  { id:2, name:"Slot 2", location:"Harrison Road", price:45, status:"available" }
+  { id:3, name:"Slot 3", location:"SM Baguio",     price:60, status:"available" }
+  { id:4, name:"Slot 4", location:"Cedar Peak",    price:40, status:"available" }
+  { id:5, name:"Slot 5", location:"Mabini",        price:55, status:"available" }
+
+Locations array: ["Session Road","Harrison Road","SM Baguio","Cedar Peak","Mabini"]
+
+========================================
+PAGES & ROUTING
+========================================
+
+--- app/page.tsx ---
+Redirects to /login using Next.js redirect().
+
+--- app/login/page.tsx ---
+"use client". Dark slate card centered on screen.
+Logo: blue circle with Car icon, title "SurePark Baguio", subtitle "Smart Parking Management System".
+Tab switcher (Login / Sign Up) using bg-slate-900 pill with blue active tab.
+Login form: email + password fields (dark bg-slate-900 inputs, blue focus ring).
+Sign Up form: name + email + password fields.
+Auth logic uses localStorage:
+  - surepark_users: array of {email, password, name}
+  - surepark_user: currently logged-in user object
+On login: find matching user in array, set surepark_user, redirect to /dashboard.
+On signup: check for duplicate email, push to array, set surepark_user, redirect to /dashboard.
+Show red error banner for validation errors.
+Footer note: "Demo Mode - Data stored locally in browser".
+If already logged in (surepark_user exists), auto-redirect to /dashboard.
+
+--- app/dashboard/page.tsx ---
+"use client". Full feature dashboard. All state: user, slots, selectedLocation ("All"),
+selectedSlot (ParkingSlot|null), paymentMethod ("GCash"), qrInput, scanResult,
+showScanner (false), showMap (true), showTips (true).
+
+HELPERS:
+  syncSlots(updated) — calls setSlots + localStorage.setItem("surepark_slots")
+  patchApi(slotId, patch) — PATCH /api/slots/:id, silently catches errors
+
+ON MOUNT (useEffect):
+  1. Read surepark_user from localStorage, if missing redirect to /login.
+  2. Fetch /api/slots, on success syncSlots with result; on error fall back to
+     localStorage surepark_slots or DEFAULT_SLOTS.
+
+POLLING (useEffect every 3000ms):
+  Fetch /api/slots with cache:"no-store". If result differs from current slots,
+  update state + localStorage + keep selectedSlot in sync by id.
+
+EXPIRY TIMER (useEffect every 1000ms):
+  For any reserved slot where !checkedIn and now - reservedAt > 15*60*1000,
+  reset it to available and call patchApi.
+
+HANDLERS:
+  handleLogout — remove surepark_user, push to /login
+  handleReserve(slot) — patch status:"reserved", reservedBy:user.email, reservedAt:Date.now()
+  handlePayment(slot) — generate qrToken = "SP-{id}-{Date.now().toString(36).toUpperCase()}",
+                         patch paid:true, activeQrToken:qrToken
+  handleScanQr() — validate qrInput against activeQrToken, check paid+reserved+not-expired,
+                    patch status:"occupied", checkedIn:true
+  handleReset() — POST /api/slots/reset, reset to DEFAULT_SLOTS, clear selectedSlot+scanResult
+  handleBollardToggle(slot) — if !slot.paid return; toggle bollardUp; POST /api/bollard
+                               with {slotId, bollardUp: !slot.bollardUp}
+  handleCarLeft(slot) — if status!=="occupied" return; reset slot to bare available object,
+                         POST /api/sensor with {slotId, carPresent:false}; setSelectedSlot(null)
+  handleCarDetected(slot) — if status!=="reserved"||!paid return; patch status:"occupied",
+                             checkedIn:true, bollardUp:true; POST /api/sensor {slotId, carPresent:true}
+  getTimeRemaining(reservedAt) — returns "MM:SS" countdown string or "Expired"
+  filteredSlots — slots filtered by selectedLocation (or all if "All")
+  stats — {available, reserved, occupied} counts from filteredSlots
+  myReservations — slots where reservedBy===user.email && status==="reserved"
+
+UI LAYOUT (dark slate, max-w-7xl mx-auto, p-4 md:p-8):
+
+1. HEADER (flex justify-between, mb-8):
+   Left: blue circle with Car icon + "SurePark Baguio" h1 + "Welcome, {user.name||user.email}" subtitle
+   Right: 3 buttons:
+     - Scanner (green, QrCode icon) — toggles showScanner
+     - Reset (slate, RefreshCw icon) — handleReset
+     - Logout (red, LogOut icon) — handleLogout
+
+2. QR SCANNER PANEL (shown when showScanner=true, bg-slate-800 rounded-lg p-6 mb-6):
+   Header: QrCode icon + "QR Code Scanner"
+   Input: text field for QR token, placeholder "e.g., SP-3-ABC123", dark styling
+   Button: "Validate & Check In" full-width green
+   Result: green or red banner with CheckCircle2/XCircle icon + message
+
+3. HOW TO USE SUREPARK (collapsible, blue-tinted border, mb-6):
+   Toggle button shows Info icon + "HOW TO USE SUREPARK" + ChevronUp/Down
+   6-step grid (1 col mobile, 2 col sm, 3 col lg), each step card has colored number badge + icon + title + desc:
+     Step 1 (blue):   Search icon,      "Find a Slot" — use location filter or map pin
+     Step 2 (green):  CalendarCheck,    "Reserve the Slot" — click View then Reserve, 15 min window
+     Step 3 (yellow): Wallet icon,      "Pay the Ticket" — choose GCash/Maya/Card, get QR token
+     Step 4 (orange): Zap icon,         "Control the Bollard" — unlocks after payment
+     Step 5 (purple): Radio icon,       "Car Detected — Occupied" — sensor auto-changes status
+     Step 6 (slate):  Car icon,         "Exit & Free the Slot" — Car Left button resets to available
+   Status legend below grid: green dot, yellow dot, red dot with labels
+
+4. LOCATION FILTER (mb-6):
+   Label "Filter by Location"
+   Custom styled select (bg-slate-800, blue focus ring, MapPin icon left, ChevronDown icon right, w-72)
+   Options: "All Locations" + each of 5 LOCATIONS
+
+5. STATS GRID (3 cols, mb-8):
+   Green card: Available count + CheckCircle2 icon
+   Yellow card: Reserved count + Clock icon
+   Red card: Occupied count + Car icon
+
+6. MY ACTIVE RESERVATIONS (shown when myReservations.length > 0, blue card, mb-8):
+   List each reservation: name+location, countdown timer in yellow mono font
+   Button per slot: "View QR" if paid else "Pay Now" — opens selectedSlot modal
+
+7. PARKING SLOTS GRID (1 col mobile, 2 col md, 3 col lg, gap-6):
+   Each slot card (bg-slate-800 border-slate-700 rounded-lg p-6):
+     - Name (xl bold white) + location (MapPin icon, slate-400)
+     - Status badge (green/yellow/red pill, top right)
+     - Price "₱XX /hour"
+     - If reservedBy: dark inner box showing who reserved + countdown
+     - Buttons row:
+       * "View" (slate-700) always shown — opens modal
+       * "Reserve" (blue) if available
+       * "Car Left" (orange, Car icon) if occupied — calls handleCarLeft
+
+8. MAP SECTION (mt-10 mb-4, BELOW the slots grid):
+   Header with MapPin icon + "Parking Locations Map" + toggle button (Hide/Show Map)
+   ParkingMap component loaded dynamically (ssr:false) with 440px height loading skeleton
+   Props: slots, onLocationClick (sets selectedLocation), selectedLocation
+
+9. SLOT DETAIL MODAL (fixed inset-0 black/70 backdrop, z-2000):
+   White X close button (XCircle).
+   Slot name + location header.
+   Status badge block (bg-slate-900).
+   Price block (bg-slate-900).
+   
+   IF reservedBy===user.email AND !paid:
+     Payment section (blue card): select GCash/Maya/Card + "Pay ₱XX via {method}" button
+
+   IF paid AND activeQrToken:
+     A. QR Token card (green):
+        - "Payment Complete — Slot Reserved" heading
+        - Dark box showing QR token in mono font
+        - If status==="reserved": yellow countdown text
+        - If status==="occupied": green "Car detected — slot is now Occupied" text
+                                  + orange "Simulate Car Left — Free Slot" button
+     
+     B. Bollard Control card (slate-900, only if reservedBy===user.email):
+        - Zap icon + "Bollard Control" + RAISED/LOWERED badge (red/green)
+        - Animated bollard visual: tall red bar (h-16) when raised, short green bar (h-4) when lowered
+          with transition-all duration-500, rounded-t-full, on a slate base platform
+        - Toggle button: if bollardUp → green "Lower Bollard" (ArrowDown); else red "Raise Bollard" (ArrowUp)
+     
+     C. Parking Sensor card (blue-950, only if status==="reserved" AND reservedBy===user.email):
+        - Pulsing Radio icon + "Parking Sensor" + "Waiting for vehicle..." badge
+        - Explanation text
+        - Blue "Simulate Car Detected" button (Car icon) — calls handleCarDetected
+   
+   IF status==="available":
+     Blue "Reserve This Slot" button — calls handleReserve + closes modal
+
+========================================
+PARKINGMAP COMPONENT (components/ParkingMap.tsx)
+========================================
+"use client". Uses leaflet imported dynamically.
+Props: slots: ParkingSlot[], onLocationClick: (loc:string)=>void, selectedLocation: string
+
+Location coordinates:
+  Session Road:  { lat:16.4122, lng:120.5930 }
+  Harrison Road: { lat:16.4098, lng:120.5960 }
+  SM Baguio:     { lat:16.4063, lng:120.5993 }
+  Cedar Peak:    { lat:16.4145, lng:120.5880 }
+  Mabini:        { lat:16.4081, lng:120.5910 }
+
+Map initializes centered on Baguio (16.4098, 120.5960) zoom 15.
+Uses OpenStreetMap tiles.
+
+Pin colors: available=#22c55e, reserved=#eab308, occupied=#ef4444
+Pin SVG (custom divIcon): circle with "P" letter + teardrop pointer below
+  Normal pin: 52x52px, selected pin: 64x64px
+  Correct iconAnchor and popupAnchor so tip touches location
+
+User location marker: blue circle with white inner circle (28x28px)
+Get user location via navigator.geolocation and show blue user marker.
+
+Popup for each pin shows: location name, slot name, status badge, price, count of slots.
+Clicking a pin calls onLocationClick(location.name) to filter the dashboard.
+
+Route drawing: when user clicks "Get Directions" in popup, draw a straight line
+from user position to pin using L.polyline with blue dashed style.
+Show RouteInfo panel (distance km, estimated minutes) in top-right of map.
+"Clear Route" button removes the line.
+
+When selectedLocation changes externally, re-center map on that location and
+open its popup automatically.
+
+Map container height: 440px, rounded-xl, border border-slate-700.
+Fix Leaflet default icon path issues using delete L.Icon.Default.prototype._getIconUrl.
+
+========================================
+API ROUTES (Next.js Route Handlers)
+========================================
+
+lib/store.ts — in-memory singleton:
+  slotStore: ParkingSlot[] initialized from DEFAULT_SLOTS
+  Export: getSlots(), updateSlot(id, patch), resetSlots()
+
+app/api/slots/route.ts — GET returns all slots as JSON
+app/api/slots/reset/route.ts — POST resets store to DEFAULT_SLOTS
+app/api/slots/[id]/route.ts — GET returns single slot; PATCH merges patch into slot
+
+app/api/sensor/route.ts — POST {slotId:number, carPresent:boolean}
+  If carPresent=true AND slot.status==="reserved" AND slot.paid:
+    Update slot: status="occupied", checkedIn:true, bollardUp:true
+  If carPresent=false AND slot.status==="occupied":
+    Reset slot to bare available (clear all reservation fields)
+  Return updated slot as JSON.
+
+app/api/bollard/route.ts
+  GET ?slotId=N — returns {slotId, bollardUp: slot.bollardUp ?? false}
+  POST {slotId:number, bollardUp:boolean} — updates slot.bollardUp, returns slot
+
+========================================
+LAYOUT & GLOBALS
+========================================
+
+app/layout.tsx:
+  Import Inter from next/font/google
+  Apply inter.className to body
+  Add className="bg-background" to <html>
+  Metadata: title "SurePark Baguio - Smart Parking System"
+
+app/globals.css:
+  Standard shadcn/ui CSS variables for dark mode
+  bg-background should map to the dark slate color (#0f172a or similar)
+
+postcss.config.mjs:
+  plugins: { tailwindcss: {}, autoprefixer: {} }
+
+tailwind.config.ts:
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"]
+  darkMode: "class"
+  theme.extend includes the CSS variable color mappings for shadcn
+
+package.json dependencies must include:
+  leaflet, react-leaflet, @types/leaflet
+  autoprefixer
+  All standard Next.js + shadcn deps
+
+========================================
+IMPORTANT BEHAVIORS
+========================================
+1. Reservation expires after 15 minutes if not paid — auto-resets to available
+2. After payment: slot stays "reserved" (not occupied yet)
+3. Bollard control only unlocks after payment is completed
+4. Car sensor (simulate or real ESP32) changes reserved → occupied
+5. "Car Left" button resets occupied → available (clears all fields)
+6. Dashboard polls /api/slots every 3 seconds so ESP32 hardware changes reflect live
+7. All slot mutations write to both localStorage AND the API store
+8. The map is placed BELOW the parking slots grid, not above
+9. Map pins are large SVG teardrops (52px normal, 64px selected)
+10. The entire app works offline using localStorage as fallback

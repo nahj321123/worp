@@ -1,0 +1,993 @@
+================================================================================
+   SUREPARK BAGUIO — ESP32 HARDWARE CONNECTION GUIDE
+   Complete Step-by-Step Instructions for Capstone Integration
+================================================================================
+   Version : 1.0
+   Target  : ESP32 DevKit V1 (or any ESP32 Dev Module board)
+   App     : SurePark Baguio (Next.js, running on local PC)
+   Updated : 2026
+================================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+  PART A  - What You Need (Hardware + Software)
+  PART B  - Understand How the System Works
+  PART C  - Wiring the Hardware
+  PART D  - Setting Up Arduino IDE for ESP32
+  PART E  - Installing Required Libraries
+  PART F  - Configuring the Sketch
+  PART G  - Flashing the ESP32
+  PART H  - Running the Web App (Server)
+  PART I  - Testing the Connection
+  PART J  - Running Multiple Slots (5 ESP32 Boards)
+  PART K  - API Reference (for advanced use)
+  PART L  - Troubleshooting
+  PART M  - Full Wiring Diagram (Text)
+
+
+================================================================================
+  PART A — WHAT YOU NEED
+================================================================================
+
+HARDWARE (per parking slot):
+  1. ESP32 DevKit V1 board                     x1
+  2. HC-SR04 Ultrasonic Sensor                 x1  (car detection)
+  3. SG90 Servo Motor  OR  MG996R Servo Motor  x1  (bollard control)
+  4. Green LED (5mm)                           x1  (available indicator)
+  5. Red LED   (5mm)                           x1  (occupied indicator)
+  6. 220-ohm resistors                         x2  (for LEDs)
+  7. 1k-ohm resistor                           x1  )
+  8. 2k-ohm resistor                           x1  ) voltage divider for ECHO pin
+  9. Breadboard                                x1
+ 10. Jumper wires (male-to-male)               ~20
+ 11. Micro USB cable                           x1  (to flash / power ESP32)
+ 12. 5V power supply or USB power bank         x1  (to power servo separately)
+
+  NOTE: If you have 5 parking slots, multiply all hardware x5.
+        Each ESP32 board handles exactly ONE parking slot.
+
+SOFTWARE:
+  1. Arduino IDE 2.x           — https://www.arduino.cc/en/software
+  2. Node.js 18+               — https://nodejs.org (for running the web app)
+  3. Your SurePark project folder (the Next.js app)
+
+NETWORK:
+  - A WiFi router/hotspot that BOTH your PC and the ESP32 boards connect to.
+  - The PC and ESP32 MUST be on the same network (same WiFi).
+  - A mobile hotspot from your phone also works.
+
+
+================================================================================
+  PART B — UNDERSTAND HOW THE SYSTEM WORKS
+================================================================================
+
+The system has three layers that talk to each other:
+
+  [ ESP32 Board ]  <---WiFi--->  [ Next.js Server on PC ]  <---Browser--->  [ Dashboard UI ]
+
+  1. NEXT.JS SERVER (your PC)
+     - Runs on http://localhost:3000
+     - Has 3 API endpoints the ESP32 uses:
+         GET  /api/slots            — returns all slot data (JSON)
+         POST /api/sensor           — ESP32 reports car arrived or car left
+         GET  /api/bollard?slotId=N — ESP32 polls for bollard raise/lower command
+     - Dashboard polls /api/slots every 3 seconds to stay updated in real time.
+
+  2. ESP32 BOARD (one per slot)
+     - Reads HC-SR04 sensor every 200ms.
+     - When a car is detected (distance < 50cm), it POSTs to /api/sensor.
+     - Every 2 seconds, it polls GET /api/bollard to check if the user pressed
+       Raise or Lower in the dashboard — then moves the servo accordingly.
+
+  3. DASHBOARD UI (browser)
+     - User picks location, reserves slot, pays, gets QR token.
+     - After payment, Bollard Control panel appears — user clicks Raise/Lower.
+     - Dashboard sends POST /api/bollard → ESP32 picks it up next poll.
+     - When sensor detects car, server auto-changes slot to Occupied.
+     - Browser sees Occupied status within 3 seconds (next poll cycle).
+
+  DATA FLOW SUMMARY:
+  ------------------
+  Car approaches slot
+    → ESP32 sensor reads < 50cm
+    → ESP32 POSTs { slotId: 1, carPresent: true } to /api/sensor
+    → Server changes slot status: "reserved" → "occupied"
+    → Dashboard browser sees red / Occupied within 3 seconds
+
+  User clicks "Lower Bollard" in dashboard
+    → Browser POSTs { slotId: 1, bollardUp: false } to /api/bollard
+    → Server stores bollardUp = false for slot 1
+    → ESP32 polls GET /api/bollard?slotId=1 (every 2 seconds)
+    → ESP32 receives { bollardUp: false }
+    → Servo motor moves to 0 degrees (lowered / open)
+    → Green LED turns ON, Red LED turns OFF
+
+  Car leaves slot
+    → ESP32 sensor reads > 50cm (no car)
+    → ESP32 POSTs { slotId: 1, carPresent: false } to /api/sensor
+    → Server changes slot status: "occupied" → "available"
+    → Dashboard browser sees green / Available within 3 seconds
+
+
+================================================================================
+  PART C — WIRING THE HARDWARE
+================================================================================
+
+  WARNING: The HC-SR04 outputs 5V on the ECHO pin.
+  The ESP32 GPIO pins are 3.3V tolerant only.
+  You MUST use a voltage divider on the ECHO pin or you risk damaging the ESP32.
+
+  VOLTAGE DIVIDER FOR ECHO PIN:
+  ─────────────────────────────
+  HC-SR04 ECHO pin
+        │
+       [1kΩ]
+        │───────────── GPIO 18 (ESP32)
+       [2kΩ]
+        │
+       GND
+
+  This divides 5V to ~3.3V: 5V × (2000 / (1000+2000)) = 3.33V  ✓
+
+
+  PIN CONNECTIONS TABLE:
+  ──────────────────────
+
+  HC-SR04 ULTRASONIC SENSOR
+  ┌──────────────┬───────────────────────────────┐
+  │ HC-SR04 Pin  │ Connect To                    │
+  ├──────────────┼───────────────────────────────┤
+  │ VCC          │ ESP32 VIN (5V)                │
+  │ GND          │ ESP32 GND                     │
+  │ TRIG         │ ESP32 GPIO 5                  │
+  │ ECHO         │ Voltage divider → ESP32 GPIO 18│
+  └──────────────┴───────────────────────────────┘
+
+  SG90 / MG996R SERVO MOTOR (bollard)
+  ┌──────────────┬───────────────────────────────┐
+  │ Servo Wire   │ Connect To                    │
+  ├──────────────┼───────────────────────────────┤
+  │ Red  (VCC)   │ External 5V supply (NOT ESP32)│
+  │ Brown (GND)  │ GND (shared with ESP32 GND)   │
+  │ Orange (PWM) │ ESP32 GPIO 13                 │
+  └──────────────┴───────────────────────────────┘
+
+  IMPORTANT: Power the servo from an external 5V supply or a separate USB
+  power bank. Powering from the ESP32's 3.3V or 5V pin directly can cause
+  voltage drops and random ESP32 resets due to the servo's high current draw.
+
+  STATUS LEDs
+  ┌──────────────┬───────────────────────────────────────┐
+  │ LED          │ Connect To                            │
+  ├──────────────┼───────────────────────────────────────┤
+  │ Green LED +  │ 220Ω resistor → ESP32 GPIO 25         │
+  │ Green LED -  │ GND                                   │
+  │ Red LED +    │ 220Ω resistor → ESP32 GPIO 26         │
+  │ Red LED -    │ GND                                   │
+  └──────────────┴───────────────────────────────────────┘
+
+  LED meaning:
+    Green ON  = Slot is available
+    Red ON    = Slot is occupied OR bollard is raised
+    Both OFF  = Transitioning / not connected
+
+
+================================================================================
+  PART D — SETTING UP ARDUINO IDE FOR ESP32
+================================================================================
+
+  STEP D-1: Install Arduino IDE 2.x
+  -----------------------------------
+  1. Go to https://www.arduino.cc/en/software
+  2. Download "Arduino IDE 2.x" for your operating system (Windows/Mac/Linux).
+  3. Run the installer and follow the on-screen steps.
+  4. Open Arduino IDE after installation.
+
+  STEP D-2: Add ESP32 Board Support
+  -----------------------------------
+  1. In Arduino IDE, go to:  File → Preferences
+  2. Find the field "Additional boards manager URLs"
+  3. Paste this URL into that field:
+       https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+  4. Click OK.
+  5. Go to:  Tools → Board → Boards Manager
+  6. In the search box, type:  esp32
+  7. Find "esp32 by Espressif Systems"
+  8. Click INSTALL.  (This downloads ~200MB, takes a few minutes.)
+  9. Wait for "INSTALLED" to appear next to it.
+
+  STEP D-3: Select the ESP32 Board
+  ----------------------------------
+  1. Plug your ESP32 into your PC via Micro USB cable.
+  2. Go to:  Tools → Board → ESP32 Arduino → "ESP32 Dev Module"
+  3. Go to:  Tools → Port
+     - On Windows: select "COM3" or "COM4" (the port number may differ)
+     - On Mac/Linux: select "/dev/ttyUSB0" or "/dev/tty.SLAB_USBtoUART"
+     - If you don't see a port, install the CP2102 or CH340 USB driver:
+         CP2102 driver: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+         CH340 driver:  https://sparks.gogo.co.nz/ch340.html
+
+  STEP D-4: Verify the Board Works (Blink Test)
+  -----------------------------------------------
+  The standard Blink example from Arduino uses LED_BUILTIN which is NOT
+  defined on many ESP32 DevKit boards. You will get this exact error:
+
+    'LED_BUILTIN' was not declared in this scope
+
+  This is NORMAL. It does not mean your board is broken or your IDE is
+  wrong. It just means your specific ESP32 variant does not define that
+  constant automatically. Follow these steps:
+
+  OPTION A — Write a manual Blink sketch (RECOMMENDED):
+  ......................................................
+  Instead of using File → Examples → Basics → Blink, write your own:
+
+    Step 1. Go to:  File → New Sketch
+    Step 2. DELETE all existing code in the editor.
+    Step 3. Paste this code exactly:
+
+            -------------------------------------------------------
+            #define LED_PIN 2   // GPIO2 is the built-in LED on
+                                // most ESP32 DevKit V1 boards
+
+            void setup() {
+              pinMode(LED_PIN, OUTPUT);
+            }
+
+            void loop() {
+              digitalWrite(LED_PIN, HIGH);  // LED ON
+              delay(500);
+              digitalWrite(LED_PIN, LOW);   // LED OFF
+              delay(500);
+            }
+            -------------------------------------------------------
+
+    Step 4. Click Upload (right arrow button, top left).
+    Step 5. When you see "Connecting......", hold the BOOT button on
+            your ESP32 until the upload percentage starts.
+    Step 6. Wait for "Done uploading" in the status bar.
+    Step 7. The small blue or red LED on your ESP32 board should now
+            blink on and off every half second.
+
+  OPTION B — Fix the original Blink example manually:
+  ....................................................
+  If you already have the Blink example open:
+
+    Step 1. At the very top of the sketch, ABOVE the setup() function,
+            add this one line:
+
+              #define LED_BUILTIN 2
+
+            So it looks like this:
+
+            -------------------------------------------------------
+            #define LED_BUILTIN 2    // <-- ADD THIS LINE
+
+            void setup() {
+              pinMode(LED_BUILTIN, OUTPUT);
+            }
+
+            void loop() {
+              digitalWrite(LED_BUILTIN, HIGH);
+              delay(1000);
+              digitalWrite(LED_BUILTIN, LOW);
+              delay(1000);
+            }
+            -------------------------------------------------------
+
+    Step 2. Upload and hold BOOT when you see "Connecting......"
+    Step 3. Wait for "Done uploading".
+    Step 4. LED should blink once per second.
+
+  WHY IS GPIO 2 THE BUILT-IN LED?
+  --------------------------------
+  On most ESP32 DevKit V1 boards (the 38-pin and 30-pin versions),
+  the on-board LED is connected to GPIO pin 2.
+  On some newer boards it may be GPIO 13 or GPIO 22.
+  If GPIO 2 does not blink, try replacing "2" with "13", then "22".
+
+  IMPORTANT NOTE FOR SUREPARK SKETCH:
+  ------------------------------------
+  Our main SurePark sketch (surepark_esp32.ino) does NOT use LED_BUILTIN.
+  It uses named pin constants like LED_GREEN_PIN and LED_RED_PIN that you
+  define yourself. So this LED_BUILTIN error will NOT appear when you
+  upload the SurePark sketch. This Blink test is only to confirm your
+  board and IDE are working before moving on.
+
+  Once the LED blinks successfully, your setup is correct.
+  Proceed to PART E.
+
+
+================================================================================
+  PART E — INSTALLING REQUIRED LIBRARIES
+================================================================================
+
+  You need TWO libraries. Install them using the Arduino Library Manager.
+
+  STEP E-1: Install ArduinoJson
+  --------------------------------
+  1. Go to:  Tools → Manage Libraries  (or click the book icon on the left sidebar)
+  2. In the search box, type:  ArduinoJson
+  3. Find "ArduinoJson by Benoit Blanchon"
+  4. Select Version: 6.x (DO NOT use version 7.x, it has breaking changes)
+  5. Click INSTALL.
+
+  STEP E-2: Install ESP32Servo
+  --------------------------------
+  1. In the same Library Manager, search for:  ESP32Servo
+  2. Find "ESP32Servo by Kevin Harrington, John K. Bennett"
+  3. Click INSTALL.
+
+  STEP E-3: Verify Libraries Are Installed
+  -----------------------------------------
+  1. Go to:  File → Examples
+  2. Scroll to the bottom where installed library examples appear.
+  3. You should see "ArduinoJson" and "ESP32Servo" listed.
+  4. If both appear, library installation is complete.
+
+
+================================================================================
+  PART F — CONFIGURING THE SKETCH
+================================================================================
+
+  The sketch file is located at:
+    surepark-baguio/esp32/surepark_esp32.ino
+
+  STEP F-1: Open the Sketch
+  --------------------------
+  1. In Arduino IDE, go to:  File → Open
+  2. Navigate to your project folder.
+  3. Open:  esp32/surepark_esp32.ino
+
+  STEP F-2: Find Your PC's Local IP Address
+  -------------------------------------------
+  Your ESP32 needs to know the IP address of your PC to send HTTP requests.
+
+  On Windows:
+    1. Press  Win + R, type  cmd, press Enter.
+    2. Type:  ipconfig
+    3. Look for "IPv4 Address" under your WiFi adapter.
+       Example:  192.168.1.100
+
+  On Mac:
+    1. Open Terminal.
+    2. Type:  ipconfig getifaddr en0
+    3. The output is your IP, e.g.:  192.168.1.100
+
+  On Linux:
+    1. Open Terminal.
+    2. Type:  hostname -I
+    3. First address shown is your IP.
+
+  IMPORTANT: Your PC's IP address can change each time you reconnect to WiFi.
+  To avoid this, set a Static IP on your PC in your router settings, or use
+  the router's DHCP reservation feature to always assign the same IP.
+
+  STEP F-3: Edit the 5 Config Lines at the Top of the Sketch
+  ------------------------------------------------------------
+  Open the .ino file and find these lines near the top (around line 50):
+
+    #define WIFI_SSID       "YOUR_WIFI_SSID"
+    #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
+    #define SERVER_IP       "192.168.1.100"
+    #define SERVER_PORT     3000
+    #define SLOT_ID         1
+
+  Replace each value:
+
+  WIFI_SSID     : The name of your WiFi network (case-sensitive).
+                  Example: "SurePark_Lab_WiFi"
+
+  WIFI_PASSWORD : Your WiFi password.
+                  Example: "capstone2025"
+
+  SERVER_IP     : The IPv4 address of your PC that you found in Step F-2.
+                  Example: "192.168.1.100"
+
+  SERVER_PORT   : Leave this as 3000 (default Next.js dev port).
+                  Change only if you started the app on a different port.
+
+  SLOT_ID       : The slot number this board represents (1 to 5).
+                  Slot 1 = Session Road
+                  Slot 2 = Harrison Road
+                  Slot 3 = SM Baguio
+                  Slot 4 = Cedar Peak
+                  Slot 5 = Mabini
+                  For the first board, use 1. Change for each additional board.
+
+  STEP F-4: Optional — Adjust the Detection Threshold
+  -----------------------------------------------------
+  Near the top of the sketch, find:
+
+    #define CAR_THRESHOLD_CM  50
+
+  This means: if the ultrasonic sensor reads LESS than 50cm, a car is detected.
+  Adjust this value based on your actual slot height and bollard mounting:
+  - For a sensor mounted 30cm above ground:  use 25
+  - For a sensor mounted 50cm above ground:  use 40
+  - For a sensor on a wall across the slot:  use the slot width minus 30cm
+
+  STEP F-5: Optional — Adjust Servo Angles for Your Bollard
+  ----------------------------------------------------------
+  Find these lines:
+
+    #define SERVO_RAISED  90
+    #define SERVO_LOWERED  0
+
+  These are angles in degrees for the SG90 servo:
+  - 0   degrees = fully lowered (bollard flat, car can pass)
+  - 90  degrees = raised (bollard blocks entry)
+  - Adjust based on your physical bollard mount.
+  - You can test angles by running: bollardServo.write(45); in setup().
+
+
+================================================================================
+  PART G — FLASHING THE ESP32
+================================================================================
+
+  STEP G-1: Connect the ESP32
+  ----------------------------
+  1. Plug the ESP32 into your PC using a Micro USB cable.
+     Make sure it is a DATA cable, not a charge-only cable.
+  2. In Arduino IDE, confirm Tools → Port shows the correct COM port.
+
+  STEP G-2: Upload the Sketch
+  ----------------------------
+  1. In Arduino IDE, click the Upload button (right arrow, top-left).
+  2. Wait — compilation takes 30-60 seconds.
+  3. When you see "Connecting......" in the status bar, you may need to:
+     - Hold the BOOT button on the ESP32 for 2-3 seconds until upload starts.
+     - Release it once you see upload percentage appearing.
+  4. When you see "Done uploading" the sketch is flashed.
+
+  STEP G-3: Open Serial Monitor to Verify
+  -----------------------------------------
+  1. Go to:  Tools → Serial Monitor
+  2. Set baud rate (bottom-right dropdown) to:  115200
+  3. Press the RESET (EN) button on the ESP32.
+  4. You should see output like this:
+
+       Connecting to YourWifi...........
+       Connected! IP: 192.168.1.105
+       SurePark ESP32 ready — Slot 1
+       [Sensor] 215.3 cm  detected=NO
+       [Sensor] 214.8 cm  detected=NO
+       [Bollard poll] HTTP 200
+       [Sensor] 214.5 cm  detected=NO
+
+  5. If WiFi does not connect:
+     - Check your WIFI_SSID and WIFI_PASSWORD for typos.
+     - Make sure your PC and phone hotspot are broadcasting 2.4 GHz WiFi.
+       The ESP32 does NOT support 5 GHz networks.
+
+  6. If you see HTTP errors (like -1 or 0):
+     - Make sure your Next.js server is running (npm run dev).
+     - Confirm SERVER_IP matches your PC's current IP address.
+     - Confirm both devices are on the same WiFi network.
+
+
+================================================================================
+  PART H — RUNNING THE WEB APP (SERVER)
+================================================================================
+
+  The Next.js app must be running on your PC for the ESP32 to communicate.
+  Follow these steps every time you use the system.
+
+  STEP H-1: Install Node.js dependencies (first time only)
+  ----------------------------------------------------------
+  1. Open a terminal (Command Prompt on Windows, Terminal on Mac/Linux).
+  2. Navigate to your project folder:
+       cd path/to/surepark-baguio
+  3. Run:
+       npm install
+  4. Wait for packages to install (may take 1-2 minutes the first time).
+
+  STEP H-2: Start the Development Server
+  ----------------------------------------
+  1. In the same terminal, run:
+       npm run dev
+  2. You should see output like:
+       ▲ Next.js 16.x
+       - Local:   http://localhost:3000
+       - Network: http://192.168.1.100:3000
+  3. The "Network" URL is what the ESP32 uses. Confirm it matches SERVER_IP
+     in your sketch.
+
+  STEP H-3: Open the Dashboard in Browser
+  -----------------------------------------
+  1. Open your browser and go to:  http://localhost:3000
+  2. Log in or create an account.
+  3. The dashboard should show all 5 parking slots.
+
+  STEP H-4: Keep the Server Running
+  -----------------------------------
+  The Next.js server MUST stay running while the ESP32 is in use.
+  Do NOT close the terminal window.
+  If you close it, the ESP32 will lose connection and show HTTP errors.
+
+
+================================================================================
+  PART I — TESTING THE CONNECTION
+================================================================================
+
+  Follow these steps in order to test that everything works end-to-end.
+
+  TEST 1: Verify ESP32 can reach the server
+  -------------------------------------------
+  1. With npm run dev running and ESP32 powered on:
+  2. Open Serial Monitor (115200 baud).
+  3. Look for:  [Bollard poll] HTTP 200
+     If you see HTTP 200 — the ESP32 is successfully talking to the server.
+     If you see HTTP -1 or no response — check PART L (Troubleshooting).
+
+  TEST 2: Simulate car detection from Serial Monitor
+  ---------------------------------------------------
+  1. Place your hand in front of the HC-SR04 sensor, 10-20cm away.
+  2. In Serial Monitor, watch for:
+       [Sensor] 15.2 cm  detected=YES
+       [Sensor] POST {"slotId":1,"carPresent":true}  HTTP 200
+  3. In the browser dashboard, the slot should change to OCCUPIED (red).
+     This may take up to 3 seconds (the dashboard polling interval).
+
+  TEST 3: Full user flow test
+  -----------------------------
+  1. In the browser, click Filter → select the location for Slot 1.
+  2. Click "View" on Slot 1.
+  3. Click "Reserve" — status turns yellow (Reserved).
+  4. Select a payment method (GCash / Maya / Card).
+  5. Click "Pay Now" — a QR token appears (e.g., SP-1-ABC123).
+  6. The Bollard Control panel unlocks.
+  7. Click "Lower Bollard" — watch the Serial Monitor:
+       [Bollard poll] HTTP 200
+       [Bollard] LOWERED
+     The servo should rotate to 0 degrees. Green LED turns ON.
+  8. Place your hand in front of the sensor.
+     Serial Monitor should show:  [Sensor] POST ... HTTP 200
+     Dashboard status changes to OCCUPIED (red).
+     The bollard auto-raises. Red LED turns ON.
+  9. Remove your hand from the sensor.
+     Serial Monitor shows:  carPresent=false, POST ... HTTP 200
+     Dashboard status changes back to AVAILABLE (green).
+
+  TEST 4: QR Scanner test
+  ------------------------
+  1. After paying (Step 5 above), copy the QR token shown.
+  2. In the dashboard, find the QR Scanner section.
+  3. Paste the token and press Validate.
+  4. The slot should check in successfully.
+
+
+================================================================================
+  PART J — RUNNING MULTIPLE SLOTS (5 ESP32 BOARDS)
+================================================================================
+
+  For a full 5-slot prototype, you need 5 ESP32 boards.
+  Each board is identical hardware but has a different SLOT_ID.
+
+  STEP J-1: Flash each board with a different SLOT_ID
+  -----------------------------------------------------
+  Before flashing each board, change only this line in the sketch:
+
+    Board 1:  #define SLOT_ID  1   (Session Road)
+    Board 2:  #define SLOT_ID  2   (Harrison Road)
+    Board 3:  #define SLOT_ID  3   (SM Baguio)
+    Board 4:  #define SLOT_ID  4   (Cedar Peak)
+    Board 5:  #define SLOT_ID  5   (Mabini)
+
+  All other config (WIFI_SSID, WIFI_PASSWORD, SERVER_IP) stays the same.
+
+  STEP J-2: Flash procedure for each board
+  -----------------------------------------
+  1. Plug Board 1 into USB.
+  2. Set SLOT_ID = 1, click Upload.
+  3. Unplug Board 1.
+  4. Plug Board 2 into USB.
+  5. Change SLOT_ID = 2, click Upload.
+  6. Repeat for all 5 boards.
+
+  STEP J-3: Power all boards
+  ---------------------------
+  Once flashed, each ESP32 can be powered by:
+    - A Micro USB power bank (5V, at least 1A per board)
+    - A shared 5V multi-port USB power supply
+    - Direct 5V regulated supply to the VIN pin
+
+  All 5 boards connect to the same WiFi and communicate with the same server.
+
+  STEP J-4: Verify all boards in Serial Monitor
+  -----------------------------------------------
+  If you want to monitor multiple boards simultaneously:
+  - Use a USB hub and open multiple Arduino IDE instances.
+  - Or use a serial terminal program like PuTTY (Windows) or screen (Mac/Linux)
+    to open multiple COM ports at once.
+
+
+================================================================================
+  PART K — API REFERENCE (for advanced use / testing)
+================================================================================
+
+  All endpoints run on:  http://<YOUR_SERVER_IP>:3000
+
+  You can test them manually using a browser or a tool like curl / Postman.
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Endpoint                   Method  Description                         │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │  /api/slots                 GET     Returns all 5 slot objects (JSON)   │
+  │  /api/slots/:id             GET     Returns one slot by ID              │
+  │  /api/slots/:id             PATCH   Update any field of a slot          │
+  │  /api/slots/reset           POST    Resets all slots to default state   │
+  │  /api/sensor                POST    Report car present/absent           │
+  │  /api/bollard?slotId=N      GET     Get bollard state for slot N        │
+  │  /api/bollard               POST    Set bollard state for slot N        │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  EXAMPLE CURL COMMANDS (run in terminal to test without ESP32):
+
+  Get all slots:
+    curl http://localhost:3000/api/slots
+
+  Simulate car detected in Slot 1:
+    curl -X POST http://localhost:3000/api/sensor \
+      -H "Content-Type: application/json" \
+      -d "{\"slotId\":1,\"carPresent\":true}"
+
+  Simulate car left Slot 1:
+    curl -X POST http://localhost:3000/api/sensor \
+      -H "Content-Type: application/json" \
+      -d "{\"slotId\":1,\"carPresent\":false}"
+
+  Check bollard state for Slot 1:
+    curl http://localhost:3000/api/bollard?slotId=1
+
+  Set bollard to raised for Slot 1:
+    curl -X POST http://localhost:3000/api/bollard \
+      -H "Content-Type: application/json" \
+      -d "{\"slotId\":1,\"bollardUp\":true}"
+
+  Reset all slots to default:
+    curl -X POST http://localhost:3000/api/slots/reset
+
+
+================================================================================
+  PART L — TROUBLESHOOTING
+================================================================================
+
+  PROBLEM: ESP32 Serial Monitor shows "WiFi failed — running in offline mode"
+  ---------------------------------------------------------------------------
+  Cause 1: Wrong SSID or password.
+    Fix: Double-check WIFI_SSID and WIFI_PASSWORD. Both are case-sensitive.
+
+  Cause 2: ESP32 cannot find the 5 GHz network.
+    Fix: The ESP32 only supports 2.4 GHz WiFi. Log in to your router and
+         make sure 2.4 GHz is enabled. On a mobile hotspot, check settings
+         and set to 2.4 GHz compatibility mode.
+
+  Cause 3: Too many devices on the network, or router is blocking new devices.
+    Fix: Try a mobile phone hotspot instead of the main router.
+
+  ---
+
+  PROBLEM: Bollard poll returns HTTP -1 or connection refused
+  ------------------------------------------------------------
+  Cause 1: Next.js server is not running.
+    Fix: Run "npm run dev" in your project folder and keep the terminal open.
+
+  Cause 2: SERVER_IP is wrong.
+    Fix: Run "ipconfig" (Windows) or "ifconfig" (Mac/Linux) on your PC and
+         verify the IPv4 address. Update SERVER_IP in the sketch and re-flash.
+
+  Cause 3: Firewall is blocking port 3000.
+    Fix (Windows): Go to Control Panel → Windows Firewall → Allow an app.
+         Add Node.js and allow it on Private networks.
+    Fix (Mac): Go to System Preferences → Security → Firewall → Options.
+         Add node and allow incoming connections.
+
+  ---
+
+  PROBLEM: Sensor reads 999cm all the time
+  ------------------------------------------
+  Cause: ECHO pin is not connected, or the voltage divider is wrong.
+    Fix: Verify wiring:
+         - TRIG (GPIO 5) → HC-SR04 TRIG
+         - HC-SR04 ECHO → 1kΩ → ESP32 GPIO 18
+                                 2kΩ to GND (from the same junction)
+    Fix: Check that the HC-SR04 is powered from VIN (5V), not 3.3V.
+
+  ---
+
+  PROBLEM: Servo is not moving / jittering
+  ------------------------------------------
+  Cause 1: Servo is powered from ESP32's 3.3V pin.
+    Fix: Power the servo from an external 5V supply.
+         Connect servo GND to the same GND as the ESP32.
+
+  Cause 2: Servo library conflict.
+    Fix: Make sure you installed "ESP32Servo" (not the standard "Servo" library).
+         The standard Servo library does not work on ESP32.
+
+  ---
+
+  PROBLEM: Slot status does not update in the browser after car is detected
+  --------------------------------------------------------------------------
+  Cause 1: The slot was not in "reserved + paid" state when the sensor fired.
+    Fix: The sensor POST to /api/sensor only changes status if the slot is
+         both "reserved" AND "paid". Complete payment in the dashboard first.
+
+  Cause 2: Browser polling is delayed.
+    Fix: The dashboard polls every 3 seconds. Wait up to 3 seconds after
+         the ESP32 posts the sensor event.
+
+  ---
+
+  PROBLEM: Upload fails — "A fatal error occurred: Failed to connect to ESP32"
+            "No serial data received"
+  -----------------------------------------------------------------------------
+
+  This is the MOST COMMON error for beginners. It means the Arduino IDE
+  cannot put the ESP32 into flashing (bootloader) mode. Work through EVERY
+  cause below in order until the upload succeeds.
+
+  CAUSE 1 — Wrong COM Port selected
+  ----------------------------------
+  Symptom: No response at all when you click Upload.
+  Fix:
+    Step 1. Unplug the ESP32 USB cable.
+    Step 2. In Arduino IDE go to Tools → Port and note which COM ports
+            are listed (e.g. COM3, COM4).
+    Step 3. Plug the ESP32 back in.
+    Step 4. Go to Tools → Port again and select the NEW port that
+            appeared. That is your ESP32.
+    Step 5. On Windows it is usually COM3, COM4, or COM5.
+            On Mac it is usually /dev/cu.usbserial-XXXXX or
+            /dev/cu.SLAB_USBtoUART.
+            On Linux it is usually /dev/ttyUSB0 or /dev/ttyACM0.
+
+  CAUSE 2 — No driver installed (CP2102 / CH340 / CH9102)
+  --------------------------------------------------------
+  Symptom: The ESP32 does NOT show up as a COM port at all when plugged in.
+  Diagnosis: Open Device Manager (Windows) or "ls /dev/tty*" (Mac/Linux).
+             If you see "Unknown Device" or no new port appears — you need
+             a driver.
+
+  Most ESP32 DevKit boards use one of these USB-to-Serial chips:
+    - CP2102  (Silicon Labs)
+    - CH340G  (WCH)
+    - CH9102X (WCH newer)
+
+  How to identify which chip your board has:
+    Look at the small IC near the USB port on your board.
+    It will be labeled CP2102, CH340, or CH9102.
+
+  Download and install the correct driver:
+
+    CP2102 Driver (Silicon Labs):
+      URL: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+      Windows: Download "CP210x Windows Drivers", run the .exe installer.
+      Mac:     Download "CP210x VCP Mac OSX Driver", run the .pkg installer.
+
+    CH340 / CH341 Driver (WCH):
+      URL: https://www.wch-ic.com/downloads/CH341SER_EXE.html
+      Windows: Run CH341SER.exe, click INSTALL.
+      Mac:     Download CH34xVCPDriver.pkg, run the installer.
+               Then go to System Preferences → Security & Privacy →
+               General and click "Allow" next to the blocked driver.
+
+    CH9102X Driver (WCH newer boards):
+      URL: https://www.wch-ic.com/downloads/CH343SER_EXE.html
+      Windows: Run CH343SER.exe, click INSTALL.
+      Mac:     Same process as CH340 above.
+
+  After installing:
+    Step 1. Unplug and replug the ESP32.
+    Step 2. Check Device Manager (Windows) → Ports (COM & LPT).
+            You should now see "Silicon Labs CP210x USB to UART Bridge (COM X)"
+            or "USB-SERIAL CH340 (COM X)".
+    Step 3. Select that COM port in Arduino IDE → Tools → Port.
+
+  CAUSE 3 — Bad USB Cable (DATA + POWER vs CHARGE-ONLY)
+  -------------------------------------------------------
+  Symptom: Board lights up (power LED turns on) but still no COM port
+           appears and upload fails.
+  Cause:   Many USB cables sold with phone chargers are CHARGE-ONLY.
+           They have only 2 wires (power + ground) and no data lines.
+           The ESP32 needs all 4 wires (power, ground, D+, D-).
+  Fix:
+    Step 1. Try a DIFFERENT Micro USB cable — use one that came with
+            an Android phone, Kindle, or other data device.
+    Step 2. Plug it into a direct USB port on your PC, NOT a USB hub.
+    Step 3. If the COM port now appears, the original cable was charge-only.
+
+  CAUSE 4 — ESP32 not entering Boot / Flash Mode
+  -----------------------------------------------
+  Symptom: COM port is correct, driver is installed, cable has data lines,
+           but upload still fails with "No serial data received" or
+           "Connecting..........____....."
+  Fix A — Manual Boot Mode (works on most boards):
+    Step 1. In Arduino IDE, click Upload (the right arrow button).
+    Step 2. Watch the bottom status bar. When you see:
+              "Connecting..........____....."
+            or just a row of dots and underscores —
+    Step 3. IMMEDIATELY press and HOLD the "BOOT" button on the ESP32.
+            (Also labeled "IO0" or "FLASH" on some boards.
+             It is usually on the LEFT side of the board near GPIO0.)
+    Step 4. Hold BOOT for 2-3 seconds while the dots keep appearing.
+    Step 5. Release BOOT once you see the upload percentage start:
+              "Writing at 0x00001000... (1 %)"
+    Step 6. The upload will complete automatically. Do NOT press BOOT again.
+
+  Fix B — Hold BOOT before clicking Upload:
+    Step 1. Press and HOLD the BOOT button first.
+    Step 2. While still holding BOOT, click Upload in Arduino IDE.
+    Step 3. Release BOOT once you see the percentage start.
+
+  Fix C — Use the RST + BOOT sequence:
+    Step 1. Press and HOLD BOOT.
+    Step 2. While holding BOOT, also press and RELEASE the RST (EN) button.
+    Step 3. Release BOOT.
+    Step 4. The ESP32 is now in bootloader mode. Click Upload immediately.
+
+  CAUSE 5 — Wrong Board selected in Arduino IDE
+  -----------------------------------------------
+  Symptom: Port is visible, BOOT button pressed, but still fails.
+  Fix:
+    Step 1. Go to Arduino IDE → Tools → Board → ESP32 Arduino.
+    Step 2. Select "ESP32 Dev Module".
+            Do NOT select "ESP32 Wrover Module" or "ESP32-S2" or others.
+    Step 3. Go to Tools and confirm these settings:
+              Upload Speed:       921600
+              CPU Frequency:      240MHz (WiFi/BT)
+              Flash Frequency:    80MHz
+              Flash Mode:         DIO
+              Flash Size:         4MB (32Mb)
+              Partition Scheme:   Default 4MB with spiffs
+              Core Debug Level:   None
+              PSRAM:              Disabled
+              Programmer:         AVRISP mkII (or leave default)
+
+  CAUSE 6 — ESP32 board package not installed
+  --------------------------------------------
+  Symptom: "ESP32 Dev Module" does not appear in Tools → Board at all.
+  Fix:
+    Step 1. Open Arduino IDE.
+    Step 2. Go to File → Preferences.
+    Step 3. In "Additional Boards Manager URLs" paste this URL:
+              https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    Step 4. Click OK.
+    Step 5. Go to Tools → Board → Boards Manager.
+    Step 6. Search for "esp32".
+    Step 7. Find "esp32 by Espressif Systems" and click Install.
+            Wait for it to finish (it downloads ~200MB).
+    Step 8. Go to Tools → Board → ESP32 Arduino → ESP32 Dev Module.
+
+  CAUSE 7 — Another program is using the COM Port
+  -------------------------------------------------
+  Symptom: Error says "Could not open port COM3: Access is denied"
+           or the COM port disappears after you open Serial Monitor.
+  Fix:
+    Step 1. Close the Serial Monitor if it is open.
+    Step 2. Close any other programs that may use serial ports:
+            - PlatformIO / VSCode ESP-IDF extension
+            - Putty, Tera Term, CoolTerm
+            - Any other Arduino IDE windows
+    Step 3. Only ONE program can use a COM port at a time.
+    Step 4. Unplug and replug the ESP32, then try Upload again.
+
+  CAUSE 8 — USB Port power issue
+  --------------------------------
+  Symptom: Upload starts but fails midway, or ESP32 keeps resetting.
+  Fix:
+    Step 1. Plug the ESP32 into a USB port DIRECTLY on your PC motherboard.
+            Avoid USB hubs, extension cables, and front-panel USB ports.
+    Step 2. Some laptop USB ports do not supply enough current. If the
+            issue persists, try using a powered USB hub (one with its
+            own power adapter).
+
+  CAUSE 9 — Antivirus or Windows Defender blocking the upload
+  ------------------------------------------------------------
+  Symptom: Upload fails on Windows with no clear error message.
+  Fix:
+    Step 1. Temporarily disable Windows Defender real-time protection.
+    Step 2. Try the upload again.
+    Step 3. If it works, add the Arduino IDE folder and your sketch
+            folder as exceptions in Windows Defender.
+    Step 4. Re-enable Windows Defender.
+
+  CAUSE 10 — Linux permission denied on /dev/ttyUSB0
+  ----------------------------------------------------
+  Symptom (Linux only): "Error opening serial port '/dev/ttyUSB0'.
+                         (Port busy or access denied)"
+  Fix:
+    Step 1. Open a terminal and run:
+              sudo usermod -a -G dialout $USER
+    Step 2. LOG OUT and LOG BACK IN (or reboot). The group change
+            only takes effect after a new session.
+    Step 3. Try the upload again.
+
+  SUMMARY — QUICKEST FIX TO TRY FIRST:
+  ----------------------------------------
+    1. Check correct COM port is selected (Tools → Port).
+    2. Install the CP2102 or CH340 driver for your board.
+    3. Try a different USB cable (data cable, not charge-only).
+    4. Click Upload, then immediately hold the BOOT button until
+       percentage appears.
+    5. Make sure "ESP32 Dev Module" is selected in Tools → Board.
+
+  ---
+
+  PROBLEM: Server state resets every time I restart "npm run dev"
+  ----------------------------------------------------------------
+  Cause: The in-memory store (lib/store.ts) resets on server restart.
+  Fix: This is expected for the demo. In a production system, replace the
+       in-memory store with a real database (Supabase, PostgreSQL, etc.).
+       Reservations made in the browser are also saved to localStorage as
+       a fallback, but the server-side state will reset.
+
+
+================================================================================
+  PART M — FULL WIRING DIAGRAM (TEXT REPRESENTATION)
+================================================================================
+
+  ESP32 DevKit V1 pinout used in this project:
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    ESP32 DevKit V1                          │
+  │                                                             │
+  │  3.3V ──────────────────────────────── (not used for servo) │
+  │  GND  ──┬──── HC-SR04 GND                                   │
+  │         ├──── Servo GND (external supply shared GND)        │
+  │         ├──── Green LED cathode                             │
+  │         ├──── Red LED cathode                               │
+  │         └──── 2kΩ resistor (voltage divider bottom)         │
+  │                                                             │
+  │  VIN (5V) ──┬── HC-SR04 VCC                                 │
+  │             └── (do NOT power servo from here)              │
+  │                                                             │
+  │  GPIO 5  ────────── HC-SR04 TRIG                            │
+  │                                                             │
+  │  GPIO 18 ────── junction of 1kΩ and 2kΩ                     │
+  │                    1kΩ ──── HC-SR04 ECHO                    │
+  │                    2kΩ ──── GND                             │
+  │                                                             │
+  │  GPIO 13 ────────── Servo PWM (orange wire)                 │
+  │                                                             │
+  │  GPIO 25 ────────── 220Ω ──── Green LED anode               │
+  │  GPIO 26 ────────── 220Ω ──── Red LED anode                 │
+  │                                                             │
+  └─────────────────────────────────────────────────────────────┘
+
+  EXTERNAL 5V SUPPLY (for servo):
+  ┌─────────────────────┐
+  │ USB Power Bank / 5V │── (+) ── Servo Red wire (VCC)
+  │ Supply              │── (-) ── Servo Brown wire (GND) ── ESP32 GND
+  └─────────────────────┘
+
+
+================================================================================
+  QUICK START CHECKLIST
+================================================================================
+
+  Use this checklist each time you set up and run the system:
+
+  [ ] 1.  PC and ESP32 are on the same WiFi network (2.4 GHz).
+  [ ] 2.  Run "ipconfig" / "ifconfig" to confirm your PC's current IP.
+  [ ] 3.  SERVER_IP in the sketch matches your PC's current IP.
+  [ ] 4.  WIFI_SSID and WIFI_PASSWORD are correct.
+  [ ] 5.  SLOT_ID is set to the correct slot number (1-5).
+  [ ] 6.  All wiring is connected as per Part C and Part M.
+  [ ] 7.  Servo is powered from external 5V (not the ESP32).
+  [ ] 8.  Voltage divider is wired on the ECHO pin.
+  [ ] 9.  Run "npm install" in the project folder (first time only).
+  [ ] 10. Run "npm run dev" and keep the terminal open.
+  [ ] 11. Open http://localhost:3000 in browser and log in.
+  [ ] 12. Flash ESP32 and open Serial Monitor at 115200 baud.
+  [ ] 13. Confirm Serial Monitor shows "Connected! IP: ..."
+  [ ] 14. Confirm "[Bollard poll] HTTP 200" appears in Serial Monitor.
+  [ ] 15. Test sensor by placing hand in front of HC-SR04.
+  [ ] 16. Confirm slot changes to Occupied in browser within 3 seconds.
+
+================================================================================
+  END OF GUIDE
+  SurePark Baguio Capstone Project — Hardware Integration
+================================================================================
