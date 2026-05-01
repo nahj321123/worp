@@ -23,17 +23,17 @@ export async function GET(req: NextRequest) {
         slotId,
         status: slot?.status || "available",
         paid: slot?.paid || false,
-        bollardUp: slot?.bollardUp || false,
+        // 🔥 FIX: Use ?? instead of || so it doesn't accidentally override 'false'
+        bollardUp: slot?.bollardUp ?? true, 
       },
       {
         headers: {
-          "Cache-Control": "no-store", // 🔥 VERY IMPORTANT
+          "Cache-Control": "no-store", 
         },
       }
     )
   } catch (error) {
     console.error("GET /api/bollard error:", error)
-
     return NextResponse.json(
       { ok: false, error: "Server error" },
       { status: 500 }
@@ -47,15 +47,17 @@ export async function POST(req: NextRequest) {
   try {
     const { slotId, bollardUp } = await req.json()
 
-    if (!slotId || typeof bollardUp !== "boolean") {
+    // 🔥 FIX: Check for undefined so we can safely pass 'false'
+    if (!slotId || bollardUp === undefined) {
       return NextResponse.json(
         { ok: false, error: "slotId + bollardUp required" },
         { status: 400 }
       )
     }
 
+    // Update Firebase directly
     await db.ref(`slots/${slotId}`).update({
-      bollardUp,
+      bollardUp: bollardUp,
     })
 
     return NextResponse.json({
@@ -65,7 +67,6 @@ export async function POST(req: NextRequest) {
     })
   } catch (error) {
     console.error("POST /api/bollard error:", error)
-
     return NextResponse.json(
       { ok: false, error: "Server error" },
       { status: 500 }
