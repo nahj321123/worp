@@ -14,14 +14,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     slotId,
+    status: slot?.status || "available",
+    paid: slot?.paid || false,
     bollardUp: slot?.bollardUp || false,
   })
-}
-
-export async function POST(req: NextRequest) {
-  const { slotId, bollardUp } = await req.json()
-
-  await db.ref(`slots/${slotId}`).update({ bollardUp })
-
-  return NextResponse.json({ ok: true })
 }
