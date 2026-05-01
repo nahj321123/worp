@@ -6,6 +6,14 @@ import { db } from "@/lib/firebaseAdmin"
 // ESP32 hardware calls this when the ultrasonic sensor detects a change
 export async function POST(req: NextRequest) {
   try {
+    // 1. Check if db initialized successfully to prevent build-time crashes
+    if (!db) {
+      return NextResponse.json(
+        { ok: false, error: "Database not initialized" },
+        { status: 500 }
+      );
+    }
+
     const { slotId, carPresent, status } = await req.json()
 
     // Validate the incoming request
@@ -27,10 +35,10 @@ export async function POST(req: NextRequest) {
     } else {
       // 💨 CAR LEFT: Fully reset the slot to a clean slate
       updates.checkedIn = false;
-      updates.bollardUp = true;  // Keep bollard UP to protect the slot
-      updates.paid = false;      // Reset payment
-      updates.reservedBy = null; // Clear the user
-      updates.reservedAt = null; // Clear the timer
+      updates.bollardUp = true;   // Keep bollard UP to protect the slot
+      updates.paid = false;       // Reset payment
+      updates.reservedBy = null;  // Clear the user
+      updates.reservedAt = null;  // Clear the timer
     }
 
     // Push the updates to the specific slot in Firebase
