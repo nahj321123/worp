@@ -87,13 +87,17 @@ export default function DashboardPage() {
 
   const patchApi = async (slotId: number, patch: Partial<ParkingSlot>) => {
     try {
-      await fetch(`/api/slots/${slotId}`, {
+      console.log(`Sending PATCH to /api/slots/${slotId} with:`, patch);
+      const response = await fetch(`/api/slots/${slotId}`, {
         method:  "PATCH",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(patch),
       })
-    } catch {
-      // API unavailable — localStorage is the fallback
+      if (!response.ok) {
+        console.error("Failed to update Firebase API");
+      }
+    } catch (err) {
+      console.error("API unavailable — fallback active", err);
     }
   }
 
@@ -107,8 +111,10 @@ export default function DashboardPage() {
     fetch("/api/slots")
       .then((r) => r.json())
       .then((apiSlots: ParkingSlot[]) => {
-        setSlots(apiSlots)
-        localStorage.setItem("surepark_slots", JSON.stringify(apiSlots))
+        if(Array.isArray(apiSlots)) {
+            setSlots(apiSlots)
+            localStorage.setItem("surepark_slots", JSON.stringify(apiSlots))
+        }
       })
       .catch(() => {
         const saved = localStorage.getItem("surepark_slots")
@@ -124,7 +130,11 @@ export default function DashboardPage() {
     const poll = setInterval(async () => {
       try {
         const res   = await fetch("/api/slots", { cache: "no-store" })
+        if(!res.ok) return;
         const fresh = (await res.json()) as ParkingSlot[]
+        
+        if(!Array.isArray(fresh)) return;
+
         setSlots((prev) => {
           if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev
           localStorage.setItem("surepark_slots", JSON.stringify(fresh))
@@ -141,7 +151,6 @@ export default function DashboardPage() {
       }
     }, 500)
     return () => clearInterval(poll)
-  // no selectedSlot dependency — we use a ref so the interval never resets
   }, [])
 
   // ── reservation expiry timer ──────────────────────────────────────────────
@@ -165,7 +174,6 @@ export default function DashboardPage() {
       })
     }, 1000)
     return () => clearInterval(timer)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleLogout = () => {
@@ -173,13 +181,17 @@ export default function DashboardPage() {
     router.push("/login")
   }
 
+  // 🔥 RESERVATION LOGIC
   const handleReserve = async (slot: ParkingSlot) => {
     if (slot.status !== "available") return
+    
     // bollardUp: true = bollard is RAISED/CLOSED on reservation — car cannot enter yet
     const patch = { status: "reserved" as const, reservedBy: user.email, reservedAt: Date.now(), bollardUp: true }
+    
     const updated = slots.map((s) => s.id === slot.id ? { ...s, ...patch } : s)
     syncSlots(updated)
     setSelectedSlot(updated.find((s) => s.id === slot.id) || null)
+    
     await patchApi(slot.id, patch)
   }
 
@@ -218,68 +230,27 @@ export default function DashboardPage() {
     setScanResult(null)
   }
 
-  // Replaces both physical buttons — tells ESP32 the slot is authorized to open
-  const handleActivate = async (slot: ParkingSlot) => {
-    if (!slot.paid || slot.status !== "reserved") return
-    const patch   = { activated: !slot.activated }
-    const updated = slots.map((s) => s.id === slot.id ? { ...s, ...patch } : s)
-    syncSlots(updated)
-    setSelectedSlot(updated.find((s) => s.id === slot.id) || null)
-    try {
-      await fetch("/api/command", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ slotId: slot.id, activated: !slot.activated }),
-      })
-    } catch { /* offline */ }
-  }
-
+  // 🔥 BOLLARD CONTROL LOGIC
   const handleBollardToggle = async (slot: ParkingSlot) => {
     // Must be paid before bollard can be lowered
     if (!slot.paid || slot.status !== "reserved") return
+    
     const newBollardUp = !slot.bollardUp
     const patch = { bollardUp: newBollardUp }
     const updated = slots.map((s) => s.id === slot.id ? { ...s, ...patch } : s)
     syncSlots(updated)
     setSelectedSlot(updated.find((s) => s.id === slot.id) || null)
+    
     try {
+      console.log(`Sending POST to /api/bollard to set bollardUp: ${newBollardUp}`);
       await fetch("/api/bollard", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ slotId: slot.id, bollardUp: newBollardUp }),
       })
-    } catch { /* offline */ }
-  }
-
-  const handleCarLeft = async (slot: ParkingSlot) => {
-    if (slot.status !== "occupied") return
-    const reset: ParkingSlot = { id: slot.id, name: slot.name, location: slot.location, price: slot.price, status: "available" }
-    const updated = slots.map((s) => s.id === slot.id ? reset : s)
-    syncSlots(updated)
-    setSelectedSlot(null)
-    // Use sensor endpoint — carPresent: false means car has left
-    try {
-      await fetch("/api/sensor", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ slotId: slot.id, carPresent: false }),
-      })
-    } catch { /* offline */ }
-  }
-
-  const handleCarDetected = async (slot: ParkingSlot) => {
-    if (slot.status !== "reserved" || !slot.paid) return
-    const patch   = { status: "occupied" as const, checkedIn: true, bollardUp: true }
-    const updated = slots.map((s) => s.id === slot.id ? { ...s, ...patch } : s)
-    syncSlots(updated)
-    setSelectedSlot(updated.find((s) => s.id === slot.id) || null)
-    try {
-      await fetch("/api/sensor", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ slotId: slot.id, carPresent: true }),
-      })
-    } catch { /* offline */ }
+    } catch (err) { 
+      console.error("Error toggling bollard", err)
+    }
   }
 
   const filteredSlots =
@@ -853,22 +824,6 @@ export default function DashboardPage() {
                         </button>
                       </div>
                     )}
-
-                    {/* Live sensor status — hardware controlled only */}
-                    {selectedSlot.status === "reserved" && selectedSlot.reservedBy === user.email && selectedSlot.activated && (
-                      <div className="bg-blue-950/50 border border-blue-800 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <Radio className="w-4 h-4 text-blue-400 animate-pulse" />
-                          <h4 className="text-white font-semibold text-sm">Parking Sensor</h4>
-                          <span className="ml-auto text-xs text-blue-400 bg-blue-900/40 px-2 py-0.5 rounded-full border border-blue-800 animate-pulse">
-                            Live — monitoring...
-                          </span>
-                        </div>
-                        <p className="text-slate-400 text-xs leading-relaxed">
-                          The HC-SR04 sensor on your ESP32 is actively monitoring the slot. Drive your vehicle in — the status will update to Occupied automatically once detected.
-                        </p>
-                      </div>
-                    )}
                   </div>
                 )}
 
@@ -876,7 +831,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => {
                       handleReserve(selectedSlot)
-                      setSelectedSlot(null)
+                      setSelectedSlot(null) // Close modal so user sees main dashboard update
                     }}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors"
                   >
