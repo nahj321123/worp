@@ -1,19 +1,17 @@
 import * as admin from "firebase-admin";
 
 const initializeFirebase = () => {
-  if (admin.apps.length > 0) {
-    return admin.app();
+  // If already initialized, use the existing app
+  if (admin.apps.length > 0) return admin.app();
+
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+  // Safety check: if the key is missing during build, don't crash
+  if (!privateKey) {
+    console.warn("Firebase key missing; skipping initialization during build.");
+    return null;
   }
 
-  let privateKey = process.env.FIREBASE_PRIVATE_KEY || "";
-
-  // 1. If Vercel wrapped it in quotes, strip them
-  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-    privateKey = privateKey.slice(1, -1);
-  }
-
-  // 2. Fix formatting: Replace literal '\n' strings with actual newlines
-  // and handle cases where the key might be one giant line
   const formattedKey = privateKey.replace(/\\n/g, '\n');
 
   return admin.initializeApp({
@@ -27,4 +25,5 @@ const initializeFirebase = () => {
 };
 
 const app = initializeFirebase();
-export const db = admin.database(app);
+// Only export the DB if the app was successfully created
+export const db = app ? admin.database(app) : null;
