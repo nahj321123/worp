@@ -1,20 +1,11 @@
 import * as admin from "firebase-admin";
 
-const initializeFirebase = () => {
-  // If already initialized, use the existing app
-  if (admin.apps.length > 0) return admin.app();
+if (!admin.apps.length) {
+  const rawKey = process.env.FIREBASE_PRIVATE_KEY || "";
+  // High-speed formatting: fix newlines and remove any accidental quotes
+  const formattedKey = rawKey.replace(/"/g, '').replace(/\\n/g, '\n').trim();
 
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-
-  // Safety check: if the key is missing during build, don't crash
-  if (!privateKey) {
-    console.warn("Firebase key missing; skipping initialization during build.");
-    return null;
-  }
-
-  const formattedKey = privateKey.replace(/\\n/g, '\n');
-
-  return admin.initializeApp({
+  admin.initializeApp({
     credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
@@ -22,8 +13,6 @@ const initializeFirebase = () => {
     }),
     databaseURL: process.env.FIREBASE_DATABASE_URL,
   });
-};
+}
 
-const app = initializeFirebase();
-// Only export the DB if the app was successfully created
-export const db = app ? admin.database(app) : null;
+export const db = admin.database();
