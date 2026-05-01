@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebaseAdmin";
 
-// ✅ THIS EXPORT MAKES IT A VALID MODULE
 export async function PATCH(
   req: NextRequest,
-  context: { params: { id: string } }
+  context: { params: Promise<{ id: string }> } // ✅ FIXED TYPE
 ) {
   try {
-    const slotId = context.params.id;
+    const { id } = await context.params; // ✅ IMPORTANT FIX
+
     const body = await req.json();
 
-    await db.ref(`slots/${slotId}`).update({
+    await db.ref(`slots/${id}`).update({
       ...body,
       updatedAt: Date.now(),
     });
