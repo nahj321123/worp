@@ -3,11 +3,10 @@ import { db } from "@/lib/firebaseAdmin";
 
 export async function PATCH(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> } // ✅ FIXED TYPE
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params; // ✅ IMPORTANT FIX
-
+    const { id } = await context.params;
     const body = await req.json();
 
     await db.ref(`slots/${id}`).update({
