@@ -23,38 +23,27 @@ const DEFAULT_SLOTS: ParkingSlot[] = [
 
 export default function Page() {
   const [slots, setSlots] = useState<ParkingSlot[]>(DEFAULT_SLOTS);
-  const [userId] = useState<string>("user@test.com");
+  const userId = "user@test.com";
 
-  // ================= PATCH API =================
+  // ================= API =================
   const patchApi = async (slotId: number, patch: any) => {
-    try {
-      await fetch(`/api/${slotId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(patch),
-      });
-    } catch (err) {
-      console.error("patchApi error:", err);
-    }
+    await fetch(`/api/${slotId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
   };
 
-  // ================= LOAD FROM FIREBASE =================
   const fetchSlot = async (id: number) => {
-    try {
-      const res = await fetch(`/api/slot?slotId=${id}`);
-      const data = await res.json();
+    const res = await fetch(`/api/slot?slotId=${id}`);
+    const data = await res.json();
 
-      if (data.ok) {
-        return {
-          id,
-          status: data.status,
-          bollardUp: data.bollardUp,
-        };
-      }
-    } catch (err) {
-      console.error(err);
+    if (data.ok) {
+      return {
+        id,
+        status: data.status,
+        bollardUp: data.bollardUp,
+      };
     }
     return null;
   };
@@ -69,17 +58,12 @@ export default function Page() {
     setSlots(updated);
   };
 
-  // Poll Firebase every 1 sec
   useEffect(() => {
-    const interval = setInterval(() => {
-      refreshSlots();
-    }, 1000);
-
+    const interval = setInterval(refreshSlots, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [slots]);
 
   // ================= ACTIONS =================
-
   const reserveSlot = async (slot: ParkingSlot) => {
     await patchApi(slot.id, {
       status: "reserved",
@@ -97,62 +81,78 @@ export default function Page() {
   };
 
   const lowerBollard = async (slot: ParkingSlot) => {
-    await patchApi(slot.id, {
-      bollardUp: false,
-    });
+    await patchApi(slot.id, { bollardUp: false });
   };
 
   const raiseBollard = async (slot: ParkingSlot) => {
-    await patchApi(slot.id, {
-      bollardUp: true,
-    });
+    await patchApi(slot.id, { bollardUp: true });
   };
 
   // ================= UI =================
-
-  const getColor = (status: string) => {
-    if (status === "available") return "green";
-    if (status === "reserved") return "orange";
-    return "gray";
-  };
-
   return (
-    <div style={{ padding: 20 }}>
-      <h1>🚗 SurePark Dashboard</h1>
+    <div className="min-h-screen bg-gray-900 text-white p-6">
+      <h1 className="text-3xl font-bold mb-6">🚗 SurePark Dashboard</h1>
 
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {slots.map((slot) => (
           <div
             key={slot.id}
-            style={{
-              border: "1px solid #ccc",
-              borderRadius: 10,
-              padding: 15,
-              width: 220,
-            }}
+            className="bg-gray-800 border border-gray-700 rounded-xl p-4 shadow-lg"
           >
-            <h3>{slot.name}</h3>
-            <p>{slot.location}</p>
-            <p>₱{slot.price}/hour</p>
+            <h2 className="text-lg font-semibold">{slot.name}</h2>
+            <p className="text-sm text-gray-400">{slot.location}</p>
+            <p className="mt-1">₱{slot.price}/hour</p>
 
-            <p>
+            <p className="mt-2">
               Status:{" "}
-              <b style={{ color: getColor(slot.status) }}>
+              <span
+                className={
+                  slot.status === "available"
+                    ? "text-green-400"
+                    : slot.status === "reserved"
+                    ? "text-yellow-400"
+                    : "text-gray-400"
+                }
+              >
                 {slot.status.toUpperCase()}
-              </b>
+              </span>
             </p>
 
-            <p>
+            <p className="mt-1">
               Bollard:{" "}
-              <b>{slot.bollardUp ? "UP" : "DOWN"}</b>
+              <span className="font-semibold">
+                {slot.bollardUp ? "UP" : "DOWN"}
+              </span>
             </p>
 
-            {/* ACTIONS */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <button onClick={() => reserveSlot(slot)}>Reserve</button>
-              <button onClick={() => resetSlot(slot)}>Reset</button>
-              <button onClick={() => lowerBollard(slot)}>Lower</button>
-              <button onClick={() => raiseBollard(slot)}>Raise</button>
+            <div className="flex flex-col gap-2 mt-3">
+              <button
+                onClick={() => reserveSlot(slot)}
+                className="bg-blue-500 hover:bg-blue-600 p-2 rounded"
+              >
+                Reserve
+              </button>
+
+              <button
+                onClick={() => resetSlot(slot)}
+                className="bg-gray-500 hover:bg-gray-600 p-2 rounded"
+              >
+                Reset
+              </button>
+
+              <button
+                onClick={() => lowerBollard(slot)}
+                className="bg-red-500 hover:bg-red-600 p-2 rounded"
+              >
+                Lower
+              </button>
+
+              <button
+                onClick={() => raiseBollard(slot)}
+                className="bg-green-500 hover:bg-green-600 p-2 rounded"
+              >
+                Raise
+              </button>
             </div>
           </div>
         ))}
